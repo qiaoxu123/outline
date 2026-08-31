@@ -34,6 +34,9 @@ type Meta = {
 const PAPER = "📖";
 const readKey = "outline.desktop.papers.read.v1";
 const likesKey = "outline.desktop.papers.likes.v1";
+const paperCacheKey = "outline.desktop.papers.snapshot.v1";
+const PAPER_CACHE_TTL = 30 * 60 * 1000;
+const refreshingPaperScopes = new Set<string>();
 const interactionPath = "论文库/interactions.json";
 type InteractionData = {
   version: 1;
@@ -43,6 +46,34 @@ type InteractionData = {
   >;
 };
 type Rating = { average: number; count: number; mine: number | null };
+type PaperSnapshot = {
+  savedAt: number;
+  papers: Paper[];
+  metas: Record<string, Meta>;
+  complete?: boolean;
+};
+
+function readPaperSnapshot(scope: string): PaperSnapshot | null {
+  try {
+    const parsed = JSON.parse(
+      localStorage.getItem(`${paperCacheKey}.${scope}`) ?? "null",
+    ) as PaperSnapshot | null;
+    return parsed && Array.isArray(parsed.papers) && parsed.metas
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePaperSnapshot(scope: string, snapshot: PaperSnapshot): void {
+  try {
+    localStorage.setItem(`${paperCacheKey}.${scope}`, JSON.stringify(snapshot));
+  } catch {
+    // A storage quota miss only disables the optimization; it must not block
+    // the library itself.
+  }
+}
 
 function flatten(tree: CustomDocument[]): CustomDocument[] {
   const result: CustomDocument[] = [];
@@ -139,16 +170,23 @@ export default function Papers() {
   const { documents, tabs, auth } = useStores();
   const user = useCurrentUser({ rejectOnEmpty: false });
   const history = useHistory();
-  const [papers, setPapers] = React.useState<Paper[]>([]);
-  const [metas, setMetas] = React.useState<Record<string, Meta>>({});
-  const [loading, setLoading] = React.useState(true);
+  const paperScope = auth.currentTeamId ?? window.location.host;
+  const [papers, setPapers] = React.useState<Paper[]>(
+    () => readPaperSnapshot(paperScope)?.papers ?? [],
+  );
+  const [metas, setMetas] = React.useState<Record<string, Meta>>(
+    () => readPaperSnapshot(paperScope)?.metas ?? {},
+  );
+  const [loading, setLoading] = React.useState(
+    () => !readPaperSnapshot(paperScope),
+  );
   const [query, setQuery] = React.useState("");
   const [scope, setScope] = React.useState<Scope>("all");
   const [readFilter, setReadFilter] = React.useState<ReadState | "">("");
   const [sort, setSort] = React.useState("updated");
   const [tag, setTag] = React.useState<string | null>(null);
-  const scopedReadKey = `${readKey}.${auth.currentTeamId ?? window.location.host}`;
-  const scopedLikesKey = `${likesKey}.${auth.currentTeamId ?? window.location.host}`;
+  const scopedReadKey = `${readKey}.${paperScope}`;
+  const scopedLikesKey = `${likesKey}.${paperScope}`;
   const [read, setRead] = React.useState(readMap(scopedReadKey));
   const [likes, setLikes] = React.useState(readMap(scopedLikesKey));
   const [ratings, setRatings] = React.useState<Record<string, Rating>>({});
@@ -237,6 +275,23 @@ export default function Papers() {
   }, [papers]);
 
   React.useEffect(() => {
+    const cached = readPaperSnapshot(paperScope);
+    if (cached) {
+      setPapers(cached.papers);
+      setMetas(cached.metas);
+      setLoading(false);
+      if (cached.complete && Date.now() - cached.savedAt < PAPER_CACHE_TTL) {
+        return;
+      }
+    } else {
+      setLoading(true);
+    }
+    // A route change should not start a second full metadata crawl while the
+    // first one is already writing the same workspace snapshot.
+    if (refreshingPaperScopes.has(paperScope)) {
+      return;
+    }
+    refreshingPaperScopes.add(paperScope);
     let cancelled = false;
     (async () => {
       try {
@@ -281,19 +336,50 @@ export default function Papers() {
         const unique = [
           ...new Map(found.map((item) => [item.id, item])).values(),
         ];
-        const details = await Promise.all(
-          unique.map(async (item) => {
-            try {
-              const response = await client.post<{
-                data: CustomDocument & { text?: string };
-              }>("/documents.info", { id: item.id });
-              return [item.id, parseMeta(response.data?.text)] as const;
-            } catch {
-              return [item.id, parseMeta(undefined)] as const;
-            }
-          }),
-        );
-        const nextMetas = Object.fromEntries(details) as Record<string, Meta>;
+        // The tree contains enough information to paint the library. Show it
+        // immediately, then hydrate expensive per-document metadata in small
+        // batches so a cold cache never blocks the first screen.
+        if (!cancelled) {
+          setPapers(unique);
+          setLoading(false);
+        }
+        // Persist the usable index before fetching any document body. This is
+        // the critical cache boundary: closing the page while metadata is
+        // still hydrating must not force another full collection scan.
+        writePaperSnapshot(paperScope, {
+          savedAt: Date.now(),
+          papers: unique,
+          metas: cached?.metas ?? {},
+          complete: false,
+        });
+        const nextMetas: Record<string, Meta> = {};
+        const concurrency = 12;
+        for (let i = 0; i < unique.length; i += concurrency) {
+          const batch = await Promise.all(
+            unique.slice(i, i + concurrency).map(async (item) => {
+              try {
+                const response = await client.post<{
+                  data: CustomDocument & { text?: string };
+                }>("/documents.info", { id: item.id });
+                return [item.id, parseMeta(response.data?.text)] as const;
+              } catch {
+                return [item.id, parseMeta(undefined)] as const;
+              }
+            }),
+          );
+          for (const [id, meta] of batch) {
+            nextMetas[id] = meta;
+          }
+          if (!cancelled && i % (concurrency * 4) === 0) {
+            setMetas({ ...nextMetas });
+          }
+        }
+        writePaperSnapshot(paperScope, {
+          savedAt: Date.now(),
+          papers: unique,
+          metas: nextMetas,
+          complete: true,
+        });
         if (!cancelled) {
           setPapers(unique);
           setMetas(nextMetas);
@@ -301,13 +387,14 @@ export default function Papers() {
       } catch (error) {
         console.error("[papers] load failed", error);
       } finally {
+        refreshingPaperScopes.delete(paperScope);
         if (!cancelled) setLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [paperScope]);
 
   const allTags = React.useMemo(
     () =>
@@ -464,6 +551,17 @@ export default function Papers() {
 
   return (
     <Scene icon={<AcademicCapIcon />} title="论文库" textTitle="论文库" wide>
+      <FeatureHeader>
+        <div>
+          <FeatureTitle>论文库</FeatureTitle>
+          <FeatureHint>
+            汇总推荐阅读、精选专题与组内工作，支持按领域、阅读状态和互动记录筛选。
+          </FeatureHint>
+        </div>
+        <FeatureStats>
+          {papers.length ? `共 ${papers.length} 篇` : "正在准备论文索引"}
+        </FeatureStats>
+      </FeatureHeader>
       <Toolbar>
         <ScopeBar>
           {(["all", "liked", "history"] as Scope[]).map((item) => (
@@ -629,6 +727,29 @@ const Toolbar = styled.div`
     align-items: stretch;
   }
 `;
+const FeatureHeader = styled.div`
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 22px 0 16px;
+`;
+const FeatureTitle = styled.h2`
+  margin: 0 0 4px;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+`;
+const FeatureHint = styled.p`
+  margin: 0;
+  color: ${(props) => props.theme.textTertiary};
+  font-size: 14px;
+`;
+const FeatureStats = styled.div`
+  flex-shrink: 0;
+  color: ${(props) => props.theme.textTertiary};
+  font-size: 13px;
+  padding-top: 6px;
+`;
 const ScopeBar = styled.div`
   display: flex;
   gap: 4px;
@@ -677,14 +798,13 @@ const Summary = styled.div`
 const List = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 6px;
 `;
 const Row = styled.div`
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 13px 14px;
-  border: 1px solid ${(p) => p.theme.divider};
+  padding: 14px 12px;
+  border-bottom: 1px solid ${(p) => p.theme.divider};
   border-radius: 8px;
   cursor: pointer;
   &:hover {

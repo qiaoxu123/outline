@@ -177,9 +177,15 @@ export default function Discuss() {
         </Actions>
       }
     >
-      <Intro>
-        主题即文档，回复使用官方评论；讨论区和知识库使用同一账号与导航。
-      </Intro>
+      <FeatureHeader>
+        <div>
+          <FeatureTitle>讨论区</FeatureTitle>
+          <Intro>
+            主题即文档，回复使用官方评论；讨论区和知识库使用同一账号与导航。
+          </Intro>
+        </div>
+        <FeatureStats>{topics.length ? `${topics.length} 个主题` : ""}</FeatureStats>
+      </FeatureHeader>
       <Toolbar>
         <InputSearch
           value={query}
@@ -249,6 +255,9 @@ export default function Discuss() {
                 })
               }
             >
+              <Avatar aria-hidden>
+                {(topic.createdBy?.name ?? "成").slice(0, 1)}
+              </Avatar>
               <TopicMain>
                 <TopicTitle>{topic.title || "无标题"}</TopicTitle>
                 <TopicMeta>
@@ -288,15 +297,37 @@ const Actions = styled.div`
   display: flex;
   gap: 8px;
 `;
+const FeatureHeader = styled.div`
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 22px 0 16px;
+`;
+const FeatureTitle = styled.h2`
+  margin: 0 0 4px;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+`;
+const FeatureStats = styled.div`
+  flex-shrink: 0;
+  color: ${(props) => props.theme.textTertiary};
+  font-size: 13px;
+  padding-top: 6px;
+`;
 const Intro = styled.p`
   color: ${(p) => p.theme.textTertiary};
-  margin: 20px 0 12px;
+  margin: 0;
+  font-size: 14px;
 `;
 const Toolbar = styled.div`
   display: flex;
   gap: 12px;
   align-items: center;
   margin-bottom: 12px;
+  > *:first-child {
+    flex: 1;
+  }
 `;
 const Composer = styled.div`
   display: flex;
@@ -331,26 +362,39 @@ const ErrorText = styled.p`
 const List = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 6px;
 `;
 const Row = styled.div`
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 14px;
-  border: 1px solid ${(p) => p.theme.divider};
+  gap: 12px;
+  padding: 13px 12px;
+  border-bottom: 1px solid ${(p) => p.theme.divider};
   border-radius: 8px;
   cursor: pointer;
   &:hover {
     background: ${(p) => p.theme.surface};
   }
 `;
+const Avatar = styled.span`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: ${(props) => props.theme.sidebarActiveBackground};
+  color: ${(props) => props.theme.textSecondary};
+  font-size: 13px;
+  font-weight: 600;
+`;
 const TopicMain = styled.div`
   flex: 1;
   min-width: 0;
 `;
 const TopicTitle = styled.div`
-  font-weight: 600;
+  font-weight: 550;
+  font-size: 15px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

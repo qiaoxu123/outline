@@ -34,7 +34,7 @@ import HistoryNavigation from "./components/HistoryNavigation";
 import Section from "./components/Section";
 import SharedWithMe from "./components/SharedWithMe";
 import SidebarButton from "./components/SidebarButton";
-import SidebarLink from "./components/SidebarLink";
+import SidebarLink, { IconWrapper } from "./components/SidebarLink";
 import Starred from "./components/Starred";
 import ToggleButton from "./components/ToggleButton";
 import TrashLink from "./components/TrashLink";
@@ -199,17 +199,19 @@ const QuickNavLink = styled(SidebarLink).attrs({
   overflow: visible;
 
   &[aria-current="page"] {
-    color: ${(props) => props.theme.accent};
+    color: ${(props) => props.theme.text};
   }
 
-  &[aria-current="page"]::after {
-    content: "";
-    position: absolute;
-    inset-inline: 35%;
-    bottom: -3px;
-    height: 2px;
-    border-radius: 999px;
-    background: ${(props) => props.theme.accent};
+  &[aria-current="page"] ${IconWrapper} {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin: -4px;
+    border-radius: 8px;
+    background: ${(props) => props.theme.sidebarHoverBackground};
+    box-shadow: 0 2px 8px ${(props) => props.theme.shadow};
   }
 `;
 
