@@ -36,6 +36,7 @@ import UsersStore from "./UsersStore";
 import ViewsStore from "./ViewsStore";
 import WebhookSubscriptionsStore from "./WebhookSubscriptionStore";
 import Store from "./base/Store";
+import TabsStore from "./TabsStore";
 
 export default class RootStore {
   apiKeys: ApiKeysStore;
@@ -72,6 +73,7 @@ export default class RootStore {
   fileOperations: FileOperationsStore;
   webhookSubscriptions: WebhookSubscriptionsStore;
   userMemberships: UserMembershipsStore;
+  tabs: TabsStore;
 
   constructor() {
     // Models
@@ -113,6 +115,7 @@ export default class RootStore {
 
     // AuthStore must be initialized last as it makes use of the other stores.
     this.registerStore(AuthStore, "auth");
+    this.tabs = new TabsStore(this);
 
     // AuthStore will have synchronously rehydrated the current team from
     // localStorage at this point, if a session exists.

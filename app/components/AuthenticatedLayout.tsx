@@ -27,6 +27,7 @@ import Fade from "./Fade";
 import NotificationBadge from "./NotificationBadge";
 import { PortalContext } from "./Portal";
 import CommandBar from "./CommandBar";
+import TabBar from "~/components/Tabs/TabBar";
 
 const SettingsSidebar = lazyWithRetry(
   () => import("~/components/Sidebar/Settings")
@@ -111,6 +112,7 @@ const AuthenticatedLayout: React.FC = ({ children }: Props) => {
               <RegisterKeyDown trigger="n" handler={goToNewDocument} />
               <RegisterKeyDown trigger="t" handler={goToSearch} />
               <RegisterKeyDown trigger="/" handler={goToSearch} />
+              <TabBar />
               {children}
               <CommandBar />
               <NotificationBadge />
