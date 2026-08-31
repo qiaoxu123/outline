@@ -92,6 +92,9 @@ function AuthenticatedRoutes() {
                 path={`${homePath()}/:tab?`}
                 component={Scenes.Home.Component}
               />
+              <Route exact path="/personal-notes" component={Scenes.PersonalNotes.Component} />
+              <Route exact path="/papers" component={Scenes.Papers.Component} />
+              <Route exact path="/discuss" component={Scenes.Discuss.Component} />
               <Redirect from="/dashboard" to={homePath()} />
               <Redirect exact from="/starred" to={homePath()} />
               <Redirect

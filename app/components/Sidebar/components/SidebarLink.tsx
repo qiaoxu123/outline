@@ -35,6 +35,8 @@ type Props = Omit<NavLinkProps, "to"> & {
   icon?: React.ReactNode;
   /** Text label or content to display for the link */
   label?: React.ReactNode;
+  /** Show only the icon while retaining the label for accessibility/tooltips. */
+  iconOnly?: boolean;
   /** Optional menu to display on hover or interaction */
   menu?: React.ReactNode;
   /** Whether to show an unread badge indicator */
@@ -79,6 +81,7 @@ function SidebarLink(
     onClickIntent,
     to,
     label,
+    iconOnly = false,
     active,
     isActiveDrop,
     isDraft,
@@ -162,7 +165,7 @@ function SidebarLink(
             />
           )}
           {icon && <IconWrapper aria-hidden>{icon}</IconWrapper>}
-          <Label $ellipsis={ellipsis}>{label}</Label>
+          <Label $ellipsis={ellipsis} $iconOnly={iconOnly}>{label}</Label>
           {unreadBadge && <UnreadBadge style={unreadStyle} />}
         </Content>
       </ContextMenu>
@@ -383,7 +386,7 @@ const Link = styled(NavLink)<{
   }
 `;
 
-const Label = styled.div<{ $ellipsis: boolean }>`
+const Label = styled.div<{ $ellipsis: boolean; $iconOnly: boolean }>`
   position: relative;
   width: 100%;
   line-height: 24px;
@@ -392,6 +395,16 @@ const Label = styled.div<{ $ellipsis: boolean }>`
   text-align: start;
 
   ${(props) => props.$ellipsis && ellipsis()}
+
+  ${(props) => props.$iconOnly && `
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  `}
 
   * {
     unicode-bidi: plaintext;

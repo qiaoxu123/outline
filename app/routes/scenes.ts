@@ -12,6 +12,9 @@ export const Drafts = lazy(() => import("~/scenes/Drafts"));
 export const Home = lazy(() => import("~/scenes/Home"));
 export const Search = lazy(() => import("~/scenes/Search"));
 export const Trash = lazy(() => import("~/scenes/Trash"));
+export const PersonalNotes = lazy(() => import("~/scenes/PersonalNotes"));
+export const Papers = lazy(() => import("~/scenes/Papers"));
+export const Discuss = lazy(() => import("~/scenes/Discuss"));
 
 /**
  * Warms the chunks required to render a document with an editable editor. Each

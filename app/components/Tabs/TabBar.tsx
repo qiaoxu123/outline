@@ -7,6 +7,7 @@ import ButtonSmall from "~/components/ButtonSmall";
 import Flex from "~/components/Flex";
 import useStores from "~/hooks/useStores";
 import { s } from "@shared/styles";
+import { openInTab } from "~/utils/tabNavigation";
 
 const isDocumentPath = (path: string) =>
   path.startsWith("/doc/") && !path.includes("/history");
@@ -53,7 +54,7 @@ function TabBar() {
           onDragStart={(event) => event.dataTransfer.setData("text/plain", tab.id)}
           onDragOver={(event) => event.preventDefault()}
           onDrop={(event) => tabs.move(event.dataTransfer.getData("text/plain"), tab.id)}
-          onClick={() => history.push(tab.url)}
+          onClick={() => openInTab(history, tabs, tab)}
           onAuxClick={(event) => event.button === 1 && close(event, tab.id)}
         >
           <TabLabel title={tab.title}>

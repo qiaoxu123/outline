@@ -1,5 +1,5 @@
 import { observer } from "mobx-react";
-import { SearchIcon, HomeIcon, SidebarIcon } from "outline-icons";
+import { SearchIcon, HomeIcon, SidebarIcon, AcademicCapIcon, CommentIcon, NotepadIcon } from "outline-icons";
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
   DragActiveProvider,
@@ -121,21 +121,28 @@ function AppSidebar() {
         </TeamMenu>
         <Overflow>
           <Section>
-            <SidebarLink
-              to={homePath()}
-              icon={<HomeIcon />}
-              exact={false}
-              label={t("Home")}
-              onClickIntent={Scenes.Home.preload}
-            />
-            <SidebarLink
-              to={searchPath()}
-              icon={<SearchIcon />}
-              label={t("Search")}
-              exact={false}
-              onClick={handleSearchClick}
-              onClickIntent={Scenes.Search.preload}
-            />
+            <QuickNav aria-label="快速导航">
+              <QuickNavLink
+                to={homePath()}
+                icon={<HomeIcon />}
+                iconOnly
+                exact={false}
+                label={t("Home")}
+                onClickIntent={Scenes.Home.preload}
+              />
+              <QuickNavLink
+                to={searchPath()}
+                icon={<SearchIcon />}
+                iconOnly
+                label={t("Search")}
+                exact={false}
+                onClick={handleSearchClick}
+                onClickIntent={Scenes.Search.preload}
+              />
+              <QuickNavLink to="/personal-notes" icon={<NotepadIcon />} iconOnly label="个人笔记" exact />
+              <QuickNavLink to="/papers" icon={<AcademicCapIcon />} iconOnly label="论文库" exact />
+              <QuickNavLink to="/discuss" icon={<CommentIcon />} iconOnly label="讨论区" exact />
+            </QuickNav>
             {can.createDocument && <DraftsLink />}
           </Section>
         </Overflow>
@@ -173,6 +180,22 @@ function AppSidebar() {
 const Overflow = styled.div`
   overflow: hidden;
   flex-shrink: 0;
+`;
+
+const QuickNav = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 8px 6px;
+`;
+
+const QuickNavLink = styled(SidebarLink)`
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+  padding-inline: 0 !important;
+  border-radius: 6px;
+
 `;
 
 export default observer(AppSidebar);
