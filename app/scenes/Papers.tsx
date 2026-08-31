@@ -6,6 +6,7 @@ import Empty from "~/components/Empty";
 import InputSearch from "~/components/InputSearch";
 import Scene from "~/components/Scene";
 import useStores from "~/hooks/useStores";
+import useCurrentUser from "~/hooks/useCurrentUser";
 import { client } from "~/utils/ApiClient";
 import { openInTab } from "~/utils/tabNavigation";
 import { collectionDocuments, listCollections, type CustomDocument } from "./customData";
@@ -18,6 +19,8 @@ type Meta = { tags: string[]; venue: string | null; link: string | null; code: s
 const PAPER = "📖";
 const readKey = "outline.desktop.papers.read.v1";
 const likesKey = "outline.desktop.papers.likes.v1";
+const interactionPath = "论文库/interactions.json";
+type InteractionData = { version: 1; papers: Record<string, Record<string, { like?: boolean; at: string }>> };
 
 function flatten(tree: CustomDocument[]): CustomDocument[] {
   const result: CustomDocument[] = [];
@@ -61,6 +64,7 @@ function readMap(key: string): Record<string, string> { try { return JSON.parse(
 
 export default function Papers() {
   const { documents, tabs, auth } = useStores();
+  const user = useCurrentUser({ rejectOnEmpty: false });
   const history = useHistory();
   const [papers, setPapers] = React.useState<Paper[]>([]);
   const [metas, setMetas] = React.useState<Record<string, Meta>>({});
@@ -74,6 +78,19 @@ export default function Papers() {
   const scopedLikesKey = `${likesKey}.${auth.currentTeamId ?? window.location.host}`;
   const [read, setRead] = React.useState(readMap(scopedReadKey));
   const [likes, setLikes] = React.useState(readMap(scopedLikesKey));
+
+  React.useEffect(() => {
+    let cancelled = false;
+    window.DesktopBridge?.webdavGet(interactionPath).then((result: any) => {
+      if (cancelled || !result?.ok || !result.data?.found) return;
+      try {
+        const remote = JSON.parse(result.data.content) as InteractionData;
+        const next = Object.fromEntries(Object.entries(remote.papers ?? {}).map(([id, entries]) => [id, !!entries[user?.id ?? ""]?.like]));
+        setLikes(next); localStorage.setItem(scopedLikesKey, JSON.stringify(next));
+      } catch { /* malformed shared data falls back to local cache */ }
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [scopedLikesKey, user?.id]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -118,7 +135,23 @@ export default function Papers() {
   }).sort((a, b) => sort === "title" ? a.title.localeCompare(b.title, "zh") : (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")), [papers, metas, query, scope, readFilter, tag, sort, read, likes]);
 
   const cycleRead = (id: string) => { const next = { ...read, [id]: read[id] === "unread" ? "reading" : read[id] === "reading" ? "read" : "unread" }; setRead(next); localStorage.setItem(scopedReadKey, JSON.stringify(next)); };
-  const toggleLike = (id: string) => { const next = { ...likes }; if (next[id]) delete next[id]; else next[id] = "1"; setLikes(next); localStorage.setItem(scopedLikesKey, JSON.stringify(next)); };
+  const toggleLike = (id: string) => {
+    if (!user) return;
+    const next = { ...likes }; const liked = !next[id];
+    if (liked) next[id] = "1"; else delete next[id];
+    setLikes(next); localStorage.setItem(scopedLikesKey, JSON.stringify(next));
+    void (async () => {
+      try {
+        const currentResult: any = await window.DesktopBridge?.webdavGet(interactionPath);
+        const current: InteractionData = currentResult?.data?.found ? JSON.parse(currentResult.data.content) : { version: 1, papers: {} };
+        const paper = { ...(current.papers[id] ?? {}) };
+        if (liked) paper[user.id] = { ...(paper[user.id] ?? {}), like: true, at: new Date().toISOString() };
+        else { const entry = { ...(paper[user.id] ?? {}) }; delete entry.like; if (entry.at) paper[user.id] = entry; else delete paper[user.id]; }
+        if (Object.keys(paper).length) current.papers[id] = paper; else delete current.papers[id];
+        await window.DesktopBridge?.webdavPut(interactionPath, JSON.stringify(current, null, 2));
+      } catch (error) { console.error("[papers] shared like write failed", error); }
+    })();
+  };
   const open = (paper: Paper) => openInTab(history, tabs, { id: paper.id, url: documents.get(paper.id)?.url ?? `/doc/${paper.id}`, title: paper.title.replace(/^📖\s*/, ""), emoji: paper.emoji });
 
   return <Scene icon={<AcademicCapIcon />} title="论文库" textTitle="论文库" wide><Toolbar><ScopeBar>{(["all", "liked", "history"] as Scope[]).map((item) => <ScopeButton key={item} $active={scope === item} onClick={() => setScope(item)}>{item === "all" ? "全部" : item === "liked" ? `我赞过 · ${Object.keys(likes).length}` : "最近浏览"}</ScopeButton>)}</ScopeBar><InputSearch value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、作者、领域或会议…" /></Toolbar><Filters><select value={readFilter} onChange={(event) => setReadFilter(event.target.value as ReadState | "")}><option value="">全部阅读状态</option><option value="unread">未读</option><option value="reading">在读</option><option value="read">已读</option></select><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="updated">更新时间 新→旧</option><option value="title">标题 A→Z</option></select></Filters>{allTags.length > 0 && <TagBar>{allTags.map((item) => <Tag key={item} $active={tag === item} onClick={() => setTag(tag === item ? null : item)}>{item}</Tag>)}</TagBar>}<Summary>共 {visible.length} 篇 · 已读 {Object.values(read).filter((value) => value === "read").length} 篇</Summary>{loading ? <Empty>正在加载论文库…</Empty> : visible.length === 0 ? <Empty>没有匹配的论文。</Empty> : <List>{visible.map((paper) => { const meta = metas[paper.id] ?? { tags: [] }; const state = read[paper.id] ?? "unread"; return <Row key={paper.id} onClick={() => open(paper)}><Main><Title>{paper.emoji ?? "📖"} {paper.title.replace(/^📖\s*/, "")}</Title><MetaLine>{meta.enTitle && <span>{meta.enTitle}</span>}{meta.venue && <span>{meta.venue}</span>}{meta.tags?.slice(0, 4).map((item) => <Tag key={item} onClick={(event) => { event.stopPropagation(); setTag(item); }}>{item}</Tag>)}</MetaLine></Main><Actions><LikeButton onClick={(event) => { event.stopPropagation(); toggleLike(paper.id); }} $active={!!likes[paper.id]}>♥ {likes[paper.id] ? "已赞" : "点赞"}</LikeButton>{meta.link && <a href={meta.link} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>原文</a>}{meta.code && <a href={meta.code} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>代码</a>}<ReadButton onClick={(event) => { event.stopPropagation(); cycleRead(paper.id); }} $state={state}>{state === "read" ? "已读" : state === "reading" ? "在读" : "未读"}</ReadButton></Actions></Row>; })}</List>}</Scene>;
