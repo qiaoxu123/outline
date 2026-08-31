@@ -187,15 +187,30 @@ const QuickNav = styled.div`
   padding: 4px 8px 6px;
 `;
 
-const QuickNavLink = styled(SidebarLink).attrs((props) => ({
-  activeBackground: props.theme.sidebarHoverBackground,
-}))`
+const QuickNavLink = styled(SidebarLink).attrs({
+  activeBackground: "transparent",
+})`
   flex: 1;
   justify-content: center;
   min-width: 0;
   padding-inline: 0 !important;
   border-radius: 6px;
   box-shadow: none !important;
+  overflow: visible;
+
+  &[aria-current="page"] {
+    color: ${(props) => props.theme.accent};
+  }
+
+  &[aria-current="page"]::after {
+    content: "";
+    position: absolute;
+    inset-inline: 35%;
+    bottom: -3px;
+    height: 2px;
+    border-radius: 999px;
+    background: ${(props) => props.theme.accent};
+  }
 `;
 
 export default observer(AppSidebar);
