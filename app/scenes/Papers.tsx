@@ -37,8 +37,12 @@ const likesKey = "outline.desktop.papers.likes.v1";
 const interactionPath = "论文库/interactions.json";
 type InteractionData = {
   version: 1;
-  papers: Record<string, Record<string, { like?: boolean; at: string }>>;
+  papers: Record<
+    string,
+    Record<string, { like?: boolean; score?: number; at: string }>
+  >;
 };
+type Rating = { average: number; count: number; mine: number | null };
 
 function flatten(tree: CustomDocument[]): CustomDocument[] {
   const result: CustomDocument[] = [];
@@ -147,6 +151,7 @@ export default function Papers() {
   const scopedLikesKey = `${likesKey}.${auth.currentTeamId ?? window.location.host}`;
   const [read, setRead] = React.useState(readMap(scopedReadKey));
   const [likes, setLikes] = React.useState(readMap(scopedLikesKey));
+  const [ratings, setRatings] = React.useState<Record<string, Rating>>({});
   const [viewCounts, setViewCounts] = React.useState<Record<string, number>>(
     {},
   );
@@ -167,7 +172,29 @@ export default function Papers() {
               !!entries[user?.id ?? ""]?.like,
             ]),
           );
+          const nextRatings = Object.fromEntries(
+            Object.entries(remote.papers ?? {}).flatMap(([id, entries]) => {
+              const scores = Object.values(entries)
+                .map((entry) => entry.score)
+                .filter((score): score is number => typeof score === "number");
+              return scores.length
+                ? [
+                    [
+                      id,
+                      {
+                        average:
+                          scores.reduce((sum, score) => sum + score, 0) /
+                          scores.length,
+                        count: scores.length,
+                        mine: entries[user?.id ?? ""]?.score ?? null,
+                      } as Rating,
+                    ],
+                  ]
+                : [];
+            }),
+          );
           setLikes(next);
+          setRatings(nextRatings);
           localStorage.setItem(scopedLikesKey, JSON.stringify(next));
         } catch {
           /* malformed shared data falls back to local cache */
@@ -378,6 +405,41 @@ export default function Papers() {
       }
     })();
   };
+  const setScore = (id: string) => {
+    if (!user) return;
+    const current = ratings[id]?.mine ?? 0;
+    const score = current >= 5 ? null : current + 1;
+    setRatings((previous) => ({
+      ...previous,
+      [id]: { average: score ?? 0, count: score ? 1 : 0, mine: score },
+    }));
+    void (async () => {
+      try {
+        const result: any =
+          await window.DesktopBridge?.webdavGet(interactionPath);
+        const data: InteractionData = result?.data?.found
+          ? JSON.parse(result.data.content)
+          : { version: 1, papers: {} };
+        const paper = { ...(data.papers[id] ?? {}) };
+        const entry = {
+          ...(paper[user.id] ?? {}),
+          at: new Date().toISOString(),
+        };
+        if (score) entry.score = score;
+        else delete entry.score;
+        if (entry.like || entry.score) paper[user.id] = entry;
+        else delete paper[user.id];
+        if (Object.keys(paper).length) data.papers[id] = paper;
+        else delete data.papers[id];
+        await window.DesktopBridge?.webdavPut(
+          interactionPath,
+          JSON.stringify(data, null, 2),
+        );
+      } catch (error) {
+        console.error("[papers] shared score write failed", error);
+      }
+    })();
+  };
   const open = (paper: Paper) => {
     const nextViewed = { ...viewed, [paper.id]: new Date().toISOString() };
     setViewed(nextViewed);
@@ -437,8 +499,8 @@ export default function Papers() {
           <option value="read">已读</option>
         </select>
         <select value={sort} onChange={(event) => setSort(event.target.value)}>
-            <option value="updated">更新时间 新→旧</option>
-            <option value="views">阅读次数 多→少</option>
+          <option value="updated">更新时间 新→旧</option>
+          <option value="views">阅读次数 多→少</option>
           <option value="title">标题 A→Z</option>
         </select>
       </Filters>
@@ -476,8 +538,8 @@ export default function Papers() {
                   </Title>
                   <MetaLine>
                     {meta.enTitle && <span>{meta.enTitle}</span>}
-                {meta.venue && <span>{meta.venue}</span>}
-                <span>{viewCounts[paper.id] ?? 0} 次阅读</span>
+                    {meta.venue && <span>{meta.venue}</span>}
+                    <span>{viewCounts[paper.id] ?? 0} 次阅读</span>
                     {meta.tags?.slice(0, 4).map((item) => (
                       <Tag
                         key={item}
@@ -501,6 +563,19 @@ export default function Papers() {
                   >
                     ♥ {likes[paper.id] ? "已赞" : "点赞"}
                   </LikeButton>
+                  <ScoreButton
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setScore(paper.id);
+                    }}
+                    $active={!!ratings[paper.id]?.mine}
+                    title="点击评分，循环 1–5 星；第 5 次后清除评分"
+                  >
+                    ★{" "}
+                    {ratings[paper.id]?.average
+                      ? ratings[paper.id].average.toFixed(1)
+                      : "评分"}
+                  </ScoreButton>
                   {meta.link && (
                     <a
                       href={meta.link}
@@ -647,6 +722,13 @@ const Actions = styled.div`
   }
 `;
 const LikeButton = styled.button<{ $active: boolean }>`
+  border: 0;
+  background: transparent;
+  color: ${(p) => (p.$active ? p.theme.primary : p.theme.textTertiary)};
+  cursor: pointer;
+  font-size: 12px;
+`;
+const ScoreButton = styled.button<{ $active: boolean }>`
   border: 0;
   background: transparent;
   color: ${(p) => (p.$active ? p.theme.primary : p.theme.textTertiary)};
