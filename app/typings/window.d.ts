@@ -65,6 +65,10 @@ declare global {
        */
       addCustomHost: (host: string) => Promise<void>;
 
+      /** Shared desktop storage for profile-scoped extensions. */
+      webdavGet: (path: string) => Promise<unknown>;
+      webdavPut: (path: string, content: string) => Promise<unknown>;
+
       /**
        * Loads the authentication configuration for the given host from the main
        * process, bypassing renderer CORS restrictions. Used to verify a host is

@@ -29,6 +29,7 @@ export default function Discuss() {
   const [title, setTitle] = React.useState("");
   const [selectedCategory, setSelectedCategory] = React.useState("");
   const [likes, setLikes] = React.useState(() => readLikes(scope));
+  const [pins, setPins] = React.useState<Record<string, string>>({});
   const [error, setError] = React.useState<string | null>(null);
 
   const load = React.useCallback(async () => {
@@ -47,6 +48,15 @@ export default function Discuss() {
   }, []);
   React.useEffect(() => { void load(); }, [load]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+    client.post<{ data: { pins: { id: string; documentId: string }[] } }>("/pins.list", { limit: 100 })
+      .then((response) => {
+        if (!cancelled) setPins(Object.fromEntries((response.data?.pins ?? []).map((pin) => [pin.documentId, pin.id])));
+      }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [topics.length]);
+
   const createTopic = async () => {
     if (!title.trim()) return;
     try {
@@ -56,9 +66,15 @@ export default function Discuss() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : "发帖失败"); }
   };
   const toggleLike = (id: string) => { const next = { ...likes, [id]: !likes[id] }; setLikes(next); localStorage.setItem(`${likeKey}.${scope}`, JSON.stringify(next)); };
-  const visible = topics.filter((topic) => (!category || topic.parentDocumentId === category) && topic.title.toLowerCase().includes(query.trim().toLowerCase()));
+  const togglePin = async (id: string) => {
+    try {
+      if (pins[id]) { await client.post("/pins.delete", { id: pins[id] }); setPins((current) => { const next = { ...current }; delete next[id]; return next; }); }
+      else { const response = await client.post<{ data: { id: string } }>("/pins.create", { documentId: id }); setPins((current) => ({ ...current, [id]: response.data.id })); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "置顶操作失败"); }
+  };
+  const visible = topics.filter((topic) => (!category || topic.parentDocumentId === category) && topic.title.toLowerCase().includes(query.trim().toLowerCase())).sort((a, b) => Number(!!pins[b.id]) - Number(!!pins[a.id]));
 
-  return <Scene icon={<CommentIcon />} title="讨论区" textTitle="讨论区" wide actions={<Actions><Button onClick={() => void load()} neutral icon={<RefreshIcon />}>刷新</Button><Button onClick={() => setComposing(true)}>发新帖</Button></Actions>}><Intro>主题即文档，回复使用官方评论；讨论区和知识库使用同一账号与导航。</Intro><Toolbar><InputSearch value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索讨论主题…" />{composing && <Composer><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void createTopic()} placeholder="帖子标题…" /><select value={selectedCategory} onChange={(event) => setSelectedCategory(event.target.value)}><option value="">不分版块</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select><Button onClick={() => void createTopic()} disabled={!title.trim()}>发布</Button><Button onClick={() => setComposing(false)} neutral>取消</Button></Composer>}</Toolbar>{categories.length > 0 && <CategoryBar><Category $active={!category} onClick={() => setCategory(null)}>全部</Category>{categories.map((item) => <Category key={item.id} $active={category === item.id} onClick={() => setCategory(category === item.id ? null : item.id)}>{item.title}</Category>)}</CategoryBar>}{error && <ErrorText>{error}</ErrorText>}{loading ? <Empty>正在加载讨论主题…</Empty> : visible.length === 0 ? <Empty>暂时没有匹配的讨论主题。</Empty> : <List>{visible.map((topic) => <Row key={topic.id} onClick={() => openInTab(history, tabs, { id: topic.id, url: documents.get(topic.id)?.url ?? `/doc/${topic.id}`, title: topic.title || "无标题" })}><TopicMain><TopicTitle>{topic.title || "无标题"}</TopicTitle><TopicMeta>{topic.createdBy?.name ?? "成员"}{topic.createdAt ? ` · ${new Date(topic.createdAt).toLocaleDateString()}` : ""}</TopicMeta></TopicMain><Like onClick={(event) => { event.stopPropagation(); toggleLike(topic.id); }} $active={!!likes[topic.id]}>♥ {likes[topic.id] ? "已赞" : "点赞"}</Like></Row>)}</List>}</Scene>;
+  return <Scene icon={<CommentIcon />} title="讨论区" textTitle="讨论区" wide actions={<Actions><Button onClick={() => void load()} neutral icon={<RefreshIcon />}>刷新</Button><Button onClick={() => setComposing(true)}>发新帖</Button></Actions>}><Intro>主题即文档，回复使用官方评论；讨论区和知识库使用同一账号与导航。</Intro><Toolbar><InputSearch value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索讨论主题…" />{composing && <Composer><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void createTopic()} placeholder="帖子标题…" /><select value={selectedCategory} onChange={(event) => setSelectedCategory(event.target.value)}><option value="">不分版块</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select><Button onClick={() => void createTopic()} disabled={!title.trim()}>发布</Button><Button onClick={() => setComposing(false)} neutral>取消</Button></Composer>}</Toolbar>{categories.length > 0 && <CategoryBar><Category $active={!category} onClick={() => setCategory(null)}>全部</Category>{categories.map((item) => <Category key={item.id} $active={category === item.id} onClick={() => setCategory(category === item.id ? null : item.id)}>{item.title}</Category>)}</CategoryBar>}{error && <ErrorText>{error}</ErrorText>}{loading ? <Empty>正在加载讨论主题…</Empty> : visible.length === 0 ? <Empty>暂时没有匹配的讨论主题。</Empty> : <List>{visible.map((topic) => <Row key={topic.id} onClick={() => openInTab(history, tabs, { id: topic.id, url: documents.get(topic.id)?.url ?? `/doc/${topic.id}`, title: topic.title || "无标题" })}><TopicMain><TopicTitle>{topic.title || "无标题"}</TopicTitle><TopicMeta>{topic.createdBy?.name ?? "成员"}{topic.createdAt ? ` · ${new Date(topic.createdAt).toLocaleDateString()}` : ""}</TopicMeta></TopicMain><Like onClick={(event) => { event.stopPropagation(); toggleLike(topic.id); }} $active={!!likes[topic.id]}>♥ {likes[topic.id] ? "已赞" : "点赞"}</Like><PinButton onClick={(event) => { event.stopPropagation(); void togglePin(topic.id); }} $active={!!pins[topic.id]}>{pins[topic.id] ? "📌 已置顶" : "置顶"}</PinButton></Row>)}</List>}</Scene>;
 }
 
 const Actions = styled.div`display:flex; gap:8px;`;
@@ -74,3 +90,4 @@ const TopicMain = styled.div`flex:1; min-width:0;`;
 const TopicTitle = styled.div`font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;`;
 const TopicMeta = styled.div`color:${(p) => p.theme.textTertiary}; font-size:12px; margin-top:5px;`;
 const Like = styled.button<{ $active:boolean }>`border:0; background:transparent; color:${(p) => p.$active ? p.theme.primary : p.theme.textTertiary}; cursor:pointer; font-size:12px;`;
+const PinButton = styled.button<{ $active:boolean }>`border:0; background:transparent; color:${(p) => p.$active ? p.theme.primary : p.theme.textTertiary}; cursor:pointer; font-size:12px;`;
