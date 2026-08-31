@@ -28,7 +28,6 @@ import Collections from "./components/Collections";
 import DraggableSection, {
   normalizeSidebarSectionOrder,
 } from "./components/DraggableSection";
-import { DraftsLink } from "./components/DraftsLink";
 import DragPlaceholder from "./components/DragPlaceholder";
 import { DismissableSidebarAction } from "./components/DismissableSidebarAction";
 import HistoryNavigation from "./components/HistoryNavigation";
@@ -143,7 +142,6 @@ function AppSidebar() {
               <QuickNavLink to="/papers" icon={<AcademicCapIcon />} iconOnly label="论文库" exact />
               <QuickNavLink to="/discuss" icon={<CommentIcon />} iconOnly label="讨论区" exact />
             </QuickNav>
-            {can.createDocument && <DraftsLink />}
           </Section>
         </Overflow>
         <Scrollable flex shadow ref={scrollRef}>
@@ -189,13 +187,15 @@ const QuickNav = styled.div`
   padding: 4px 8px 6px;
 `;
 
-const QuickNavLink = styled(SidebarLink)`
+const QuickNavLink = styled(SidebarLink).attrs((props) => ({
+  activeBackground: props.theme.sidebarHoverBackground,
+}))`
   flex: 1;
   justify-content: center;
   min-width: 0;
   padding-inline: 0 !important;
   border-radius: 6px;
-
+  box-shadow: none !important;
 `;
 
 export default observer(AppSidebar);

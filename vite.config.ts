@@ -186,6 +186,7 @@ export default ({ mode }: ConfigEnv) =>
     },
     build: {
       outDir: "./build/app",
+      emptyOutDir: true,
       manifest: true,
       sourcemap: process.env.CI ? false : "hidden",
       minify: "oxc",

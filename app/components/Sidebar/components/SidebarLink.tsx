@@ -37,6 +37,8 @@ type Props = Omit<NavLinkProps, "to"> & {
   label?: React.ReactNode;
   /** Show only the icon while retaining the label for accessibility/tooltips. */
   iconOnly?: boolean;
+  /** Optional active background override for compact navigation links. */
+  activeBackground?: string;
   /** Optional menu to display on hover or interaction */
   menu?: React.ReactNode;
   /** Whether to show an unread badge indicator */
@@ -82,6 +84,7 @@ function SidebarLink(
     to,
     label,
     iconOnly = false,
+    activeBackground,
     active,
     isActiveDrop,
     isDraft,
@@ -123,10 +126,10 @@ function SidebarLink(
   const activeStyle = React.useMemo(
     () => ({
       color: theme.text,
-      background: theme.sidebarActiveBackground,
+      background: activeBackground ?? theme.sidebarActiveBackground,
       ...style,
     }),
-    [theme.text, theme.sidebarActiveBackground, style]
+    [activeBackground, theme.text, theme.sidebarActiveBackground, style]
   );
 
   const handleClick = React.useCallback(
