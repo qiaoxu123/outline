@@ -292,12 +292,9 @@ export default function Discuss() {
       }
     >
       <FeatureHeader>
-        <div>
-          <FeatureTitle>讨论区</FeatureTitle>
-          <Intro>
-            主题即文档，回复使用官方评论；讨论区和知识库使用同一账号与导航。
-          </Intro>
-        </div>
+        <Intro>
+          主题即文档，回复使用官方评论；讨论区和知识库使用同一账号与导航。
+        </Intro>
         <FeatureStats>
           {topics.length ? `${topics.length} 个主题` : "准备加载中"}
         </FeatureStats>
@@ -311,14 +308,6 @@ export default function Discuss() {
             placeholder="搜索讨论主题…"
           />
         </SearchBox>
-        <ComposerToggle
-          type="button"
-          $active={composing}
-          onClick={() => setComposing((current) => !current)}
-        >
-          <CommentIcon size={15} />
-          {composing ? "收起编辑" : "快速发帖"}
-        </ComposerToggle>
       </Toolbar>
 
       {composing && (
@@ -397,13 +386,15 @@ export default function Discuss() {
       )}
 
       {error && <ErrorText role="alert">{error}</ErrorText>}
-      <Summary>
-        <strong>{visible.length}</strong> 个主题
-        {category && categoryNames.get(category)
-          ? ` · ${categoryNames.get(category)}`
-          : ""}
-        {query.trim() ? ` · 搜索“${query.trim()}”` : ""}
-      </Summary>
+      {(category || query.trim()) && (
+        <Summary>
+          <strong>{visible.length}</strong> 个主题
+          {category && categoryNames.get(category)
+            ? ` · ${categoryNames.get(category)}`
+            : ""}
+          {query.trim() ? ` · 搜索“${query.trim()}”` : ""}
+        </Summary>
+      )}
       {loading ? (
         <Empty>正在加载讨论主题…</Empty>
       ) : !forumFound ? (
@@ -439,17 +430,14 @@ const FeatureHeader = styled.div`
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin: 18px 0 12px;
-`;
-const FeatureTitle = styled.h2`
-  margin: 0 0 4px;
-  font-size: 20px;
-  letter-spacing: -0.02em;
+  margin: 14px 0 16px;
 `;
 const FeatureStats = styled.div`
   flex-shrink: 0;
-  padding-top: 4px;
+  padding: 4px 8px;
+  border-radius: 5px;
   color: ${(props) => props.theme.textTertiary};
+  background: ${(props) => props.theme.backgroundSecondary};
   font-size: 13px;
 `;
 const Intro = styled.p`
@@ -459,9 +447,12 @@ const Intro = styled.p`
 `;
 const Toolbar = styled.div`
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
-  margin: 18px 0 12px;
+  margin: 0 0 10px;
+  padding: 8px;
+  border-radius: 8px;
+  background: ${(p) => p.theme.backgroundSecondary};
 
   @media (max-width: 700px) {
     align-items: stretch;
@@ -470,38 +461,13 @@ const Toolbar = styled.div`
 `;
 const SearchBox = styled.div`
   flex: 1;
-  min-width: 180px;
-`;
-const ComposerToggle = styled.button<{ $active: boolean }>`
-  display: inline-flex;
-  align-items: center;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid ${(p) => (p.$active ? p.theme.accent : p.theme.divider)};
-  border-radius: 6px;
-  color: ${(p) => (p.$active ? p.theme.accent : p.theme.textSecondary)};
-  background: transparent;
-  font-size: 13px;
-  cursor: pointer;
-
-  svg {
-    margin-right: 6px;
-  }
-
-  &:hover {
-    background: ${(p) => p.theme.backgroundSecondary};
-  }
-
-  &:focus-visible {
-    outline: 2px solid ${(p) => p.theme.inputBorderFocused};
-    outline-offset: 1px;
-  }
+  min-width: 220px;
 `;
 const ComposerPanel = styled.section`
   margin-bottom: 14px;
-  padding: 14px;
-  border: 1px solid ${(p) => p.theme.divider};
-  border-radius: 8px;
+  padding: 12px 14px;
+  border-left: 2px solid ${(p) => p.theme.accent};
+  border-radius: 0 6px 6px 0;
   background: ${(p) => p.theme.backgroundSecondary};
 `;
 const ComposerTitle = styled.div`
@@ -542,24 +508,41 @@ const ComposerSelect = styled.select`
 `;
 const CategoryBar = styled.div`
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: 18px;
   margin-bottom: 10px;
-  padding-bottom: 12px;
+  padding: 0 2px;
   border-bottom: 1px solid ${(p) => p.theme.divider};
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 `;
 const Category = styled.button<{ $active: boolean }>`
   display: inline-flex;
+  position: relative;
   gap: 5px;
   align-items: center;
-  padding: 5px 9px;
-  border: 1px solid ${(p) => (p.$active ? p.theme.accent : p.theme.divider)};
-  border-radius: 999px;
+  flex-shrink: 0;
+  padding: 7px 0 8px;
+  border: 0;
+  border-radius: 0;
   color: ${(p) => (p.$active ? p.theme.accent : p.theme.textTertiary)};
-  background: ${(p) =>
-    p.$active ? p.theme.backgroundSecondary : "transparent"};
+  background: transparent;
   font-size: 12px;
   cursor: pointer;
+
+  &::after {
+    position: absolute;
+    right: 0;
+    bottom: -1px;
+    left: 0;
+    height: 2px;
+    border-radius: 2px 2px 0 0;
+    background: ${(p) => (p.$active ? p.theme.accent : "transparent")};
+    content: "";
+  }
 
   &:hover {
     color: ${(p) => p.theme.text};
@@ -577,13 +560,13 @@ const CategoryCount = styled.span`
 const ErrorText = styled.p`
   margin: 10px 0;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-left: 2px solid ${(p) => p.theme.danger};
   color: ${(p) => p.theme.danger};
   background: ${(p) => p.theme.backgroundSecondary};
   font-size: 13px;
 `;
 const Summary = styled.div`
-  margin: 14px 0 6px;
+  margin: 10px 0 6px;
   color: ${(p) => p.theme.textTertiary};
   font-size: 13px;
 
@@ -609,9 +592,9 @@ const Row = styled.div`
   display: flex;
   gap: 10px;
   align-items: center;
-  padding: 12px 10px;
+  padding: 13px 10px;
   border-bottom: 1px solid ${(p) => p.theme.divider};
-  border-radius: 6px;
+  border-radius: 5px;
   cursor: pointer;
 
   &:hover {
@@ -646,7 +629,7 @@ const TopicTitle = styled.div`
   align-items: center;
   overflow: hidden;
   color: ${(p) => p.theme.text};
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -660,7 +643,7 @@ const TopicMeta = styled.div`
   display: flex;
   gap: 6px;
   align-items: center;
-  margin-top: 5px;
+  margin-top: 4px;
   overflow: hidden;
   color: ${(p) => p.theme.textTertiary};
   font-size: 12px;

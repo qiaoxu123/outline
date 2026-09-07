@@ -1,5 +1,5 @@
 import { observer } from "mobx-react";
-import { CloseIcon, PinIcon } from "outline-icons";
+import { CloseIcon, DocumentIcon, PinIcon } from "outline-icons";
 import * as React from "react";
 import { useHistory, useLocation } from "react-router-dom";
 import styled from "styled-components";
@@ -27,26 +27,33 @@ function TabBar() {
   const current = isDocumentPath(location.pathname)
     ? documentTabId(location.pathname)
     : null;
+  const currentDocument = current
+    ? documents.get(current.slice("/doc/".length).replace(/\/edit$/, ""))
+    : undefined;
 
   React.useEffect(() => {
-    if (!current) {return;}
-    const slug = current.slice("/doc/".length).replace(/\/edit$/, "");
-    const document = documents.get(slug);
+    if (!current) {
+      return;
+    }
+    const document = currentDocument;
     tabs.open({
       id: current,
       url: location.pathname,
       title: document?.title ?? "Untitled",
       emoji: document?.icon,
     });
-    if (document)
-      {tabs.update(current, {
+    if (document) {
+      tabs.update(current, {
         title: document.title,
         emoji: document.icon,
         url: location.pathname,
-      });}
-  }, [current, documents, location.pathname, tabs]);
+      });
+    }
+  }, [current, currentDocument, location.pathname, tabs]);
 
-  if (!tabs.tabs.length) {return null;}
+  if (!tabs.tabs.length) {
+    return null;
+  }
 
   const close = (event: React.MouseEvent, id: string) => {
     event.stopPropagation();
@@ -100,7 +107,9 @@ function TabBar() {
             onDrop={(event) => {
               const fromId = event.dataTransfer.getData("text/plain");
               const from = tabs.tabs.find((item) => item.id === fromId);
-              if (from?.pinned === tab.pinned) {tabs.move(fromId, tab.id);}
+              if (from?.pinned === tab.pinned) {
+                tabs.move(fromId, tab.id);
+              }
             }}
             onClick={() => openInTab(history, tabs, tab)}
             onKeyDown={(event) => {
@@ -114,6 +123,9 @@ function TabBar() {
             <TabLabel title={tab.title}>
               {tab.pinned && <PinIcon size={12} aria-hidden />}
               {tab.emoji && <span aria-hidden>{tab.emoji}</span>}
+              {!tab.emoji && !tab.pinned && (
+                <DocumentIcon size={13} aria-hidden />
+              )}
               <span>{tab.title || "Untitled"}</span>
             </TabLabel>
             {!tab.pinned && (
@@ -173,10 +185,11 @@ function TabContextMenu({
 const Bar = styled(Flex)`
   width: 100%;
   flex-shrink: 0;
-  align-items: stretch;
-  gap: 4px;
-  min-height: 44px;
-  padding: 6px 12px 0;
+  align-items: center;
+  gap: 2px;
+  height: 40px;
+  min-height: 40px;
+  padding: 4px 12px 0;
   overflow-x: auto;
   border-bottom: 1px solid ${s("divider")};
   background: ${s("backgroundSecondary")};
@@ -192,42 +205,35 @@ const Tab = styled.div<{ $active: boolean; $pinned: boolean }>`
   display: flex;
   align-items: center;
   gap: 4px;
-  min-width: ${(props) => (props.$pinned ? "56px" : "176px")};
-  max-width: 300px;
-  height: 38px;
-  padding: 0 7px 0 13px;
+  min-width: ${(props) => (props.$pinned ? "42px" : "148px")};
+  max-width: 280px;
+  height: 32px;
+  padding: 0 5px 0 10px;
   border: 1px solid transparent;
-  border-bottom: 0;
-  border-radius: 8px 8px 0 0;
+  border-radius: 6px;
   color: ${(props) =>
     props.$active ? props.theme.text : props.theme.textTertiary};
   background: ${(props) =>
-    props.$active ? props.theme.background : "transparent"};
+    props.$active ? props.theme.backgroundTertiary : "transparent"};
   font-weight: ${(props) => (props.$active ? 500 : 400)};
   cursor: pointer;
 
   &::after {
     position: absolute;
-    right: 10px;
+    right: 8px;
     bottom: 0;
-    left: 10px;
+    left: 8px;
     height: 2px;
-    border-radius: 2px 2px 0 0;
+    border-radius: 2px;
     background: ${(props) =>
       props.$active ? props.theme.accent : "transparent"};
     content: "";
   }
 
-  ${(props) =>
-    props.$active &&
-    `
-      border-color: ${props.theme.divider};
-      box-shadow: 0 -1px 0 ${props.theme.background};
-    `}
-
   &:hover {
     color: ${s("text")};
-    background: ${s("backgroundTertiary")};
+    background: ${(props) =>
+      props.$active ? props.theme.backgroundTertiary : props.theme.background};
 
     &::after {
       background: ${(props) =>
@@ -251,7 +257,12 @@ const TabLabel = styled.span`
   white-space: nowrap;
   text-overflow: ellipsis;
   font-size: 13px;
-  line-height: 1;
+  line-height: 1.2;
+
+  svg {
+    flex-shrink: 0;
+    color: ${s("textTertiary")};
+  }
 `;
 
 const CloseButton = styled.button`
@@ -267,6 +278,7 @@ const CloseButton = styled.button`
   color: ${s("textTertiary")};
   background: transparent;
   opacity: 0;
+  pointer-events: none;
   cursor: pointer;
   transition:
     opacity 120ms ease-out,
@@ -275,6 +287,7 @@ const CloseButton = styled.button`
   ${Tab}[aria-selected="true"] &,
   ${Tab}:hover & {
     opacity: 1;
+    pointer-events: auto;
   }
 
   &:hover {

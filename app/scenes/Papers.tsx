@@ -610,12 +610,9 @@ export default function Papers() {
       }
     >
       <FeatureHeader>
-        <div>
-          <FeatureTitle>论文库</FeatureTitle>
-          <FeatureHint>
-            汇总推荐阅读、精选专题与组内工作，按领域、状态和互动记录快速定位。
-          </FeatureHint>
-        </div>
+        <FeatureHint>
+          汇总推荐阅读、精选专题与组内工作，按领域、状态和互动记录快速定位。
+        </FeatureHint>
         <FeatureStats>
           {papers.length ? `${papers.length} 篇论文` : "准备索引中"}
         </FeatureStats>
@@ -646,8 +643,6 @@ export default function Papers() {
             placeholder="搜索标题、作者、领域或会议…"
           />
         </SearchBox>
-      </Toolbar>
-      <Filters aria-label="论文筛选">
         <FilterLabel>
           阅读状态
           <select
@@ -675,6 +670,8 @@ export default function Papers() {
             <option value="title">标题 A→Z</option>
           </select>
         </FilterLabel>
+      </Toolbar>
+      <FilterSummary aria-label="当前论文筛选">
         {tag && (
           <ActiveFilter>
             标签：{tag}
@@ -687,7 +684,7 @@ export default function Papers() {
             </button>
           </ActiveFilter>
         )}
-      </Filters>
+      </FilterSummary>
       {allTags.length > 0 && (
         <TagBar aria-label="热门领域标签">
           <TagHeading>热门领域</TagHeading>
@@ -703,11 +700,13 @@ export default function Papers() {
           ))}
         </TagBar>
       )}
-      <Summary>
-        <strong>{visible.length}</strong> 篇匹配 · 已读{" "}
-        {Object.values(read).filter((value) => value === "read").length} 篇
-        {scope === "history" && <span> · 按最近浏览排序</span>}
-      </Summary>
+      {(query.trim() || tag || readFilter || scope !== "all") && (
+        <Summary>
+          <strong>{visible.length}</strong> 篇匹配 · 已读{" "}
+          {Object.values(read).filter((value) => value === "read").length} 篇
+          {scope === "history" && <span> · 按最近浏览排序</span>}
+        </Summary>
+      )}
       {loading ? (
         <Empty>正在加载论文库…</Empty>
       ) : visible.length === 0 ? (
@@ -834,11 +833,13 @@ export default function Papers() {
                     aria-label={`阅读状态：${state === "read" ? "已读" : state === "reading" ? "在读" : "未读"}`}
                   >
                     <ReadDot $state={state} />
-                    {state === "read"
-                      ? "已读"
-                      : state === "reading"
-                        ? "在读"
-                        : "未读"}
+                    <ReadText>
+                      {state === "read"
+                        ? "已读"
+                        : state === "reading"
+                          ? "在读"
+                          : "未读"}
+                    </ReadText>
                   </ReadButton>
                 </Actions>
               </Row>
@@ -852,9 +853,14 @@ export default function Papers() {
 
 const Toolbar = styled.div`
   display: flex;
-  gap: 12px;
+  gap: 8px;
   align-items: center;
-  margin: 18px 0 12px;
+  margin: 0 0 10px;
+  padding: 8px;
+  border-radius: 8px;
+  background: ${(p) => p.theme.backgroundSecondary};
+  flex-wrap: wrap;
+
   @media (max-width: 700px) {
     flex-direction: column;
     align-items: stretch;
@@ -865,39 +871,34 @@ const FeatureHeader = styled.div`
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin: 18px 0 12px;
-`;
-const FeatureTitle = styled.h2`
-  margin: 0 0 4px;
-  font-size: 20px;
-  letter-spacing: -0.02em;
+  margin: 14px 0 16px;
 `;
 const FeatureHint = styled.p`
   margin: 0;
+  max-width: 680px;
   color: ${(props) => props.theme.textTertiary};
   font-size: 13px;
 `;
 const FeatureStats = styled.div`
   flex-shrink: 0;
+  padding: 4px 8px;
+  border-radius: 5px;
   color: ${(props) => props.theme.textTertiary};
+  background: ${(props) => props.theme.backgroundSecondary};
   font-size: 13px;
-  padding-top: 4px;
 `;
 const ScopeBar = styled.div`
   display: flex;
   gap: 2px;
   flex-shrink: 0;
-  padding: 3px;
-  border-radius: 8px;
-  background: ${(p) => p.theme.backgroundSecondary};
+  padding: 0;
 `;
 const ScopeButton = styled.button<{ $active: boolean }>`
   border: 0;
   border-radius: 6px;
-  padding: 6px 10px;
+  padding: 7px 9px;
   color: ${(p) => (p.$active ? p.theme.text : p.theme.textTertiary)};
   background: ${(p) => (p.$active ? p.theme.background : "transparent")};
-  box-shadow: ${(p) => (p.$active ? "0 1px 2px rgba(0, 0, 0, 0.08)" : "none")};
   font-size: 13px;
   cursor: pointer;
   &:hover {
@@ -910,39 +911,38 @@ const ScopeButton = styled.button<{ $active: boolean }>`
 `;
 const SearchBox = styled.div`
   flex: 1;
-  min-width: 180px;
-`;
-const Filters = styled.div`
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid ${(p) => p.theme.divider};
+  min-width: 220px;
 `;
 const FilterLabel = styled.label`
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
+  flex-shrink: 0;
   color: ${(p) => p.theme.textTertiary};
   font-size: 12px;
   select {
-    border: 1px solid ${(p) => p.theme.divider};
+    height: 30px;
+    border: 1px solid transparent;
     border-radius: 6px;
-    padding: 6px 9px;
+    padding: 0 8px;
     color: ${(p) => p.theme.text};
     background: ${(p) => p.theme.background};
     font: inherit;
     cursor: pointer;
   }
 `;
+const FilterSummary = styled.div`
+  min-height: 0;
+  margin-bottom: 8px;
+`;
 const TagBar = styled.div`
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
+  padding: 0 2px 8px;
+  border-bottom: 1px solid ${(p) => p.theme.divider};
 `;
 const TagHeading = styled.span`
   color: ${(p) => p.theme.textTertiary};
@@ -950,13 +950,18 @@ const TagHeading = styled.span`
   margin-right: 2px;
 `;
 const Tag = styled.button<{ $active?: boolean }>`
-  border: 1px solid ${(p) => (p.$active ? p.theme.accent : p.theme.divider)};
-  border-radius: 999px;
-  padding: 3px 8px;
+  border: 0;
+  border-radius: 5px;
+  padding: 4px 7px;
   color: ${(p) => (p.$active ? p.theme.accent : p.theme.textTertiary)};
-  background: transparent;
+  background: ${(p) =>
+    p.$active ? p.theme.backgroundSecondary : "transparent"};
   cursor: pointer;
   font-size: 12px;
+  &:hover {
+    color: ${(p) => p.theme.text};
+    background: ${(p) => p.theme.backgroundSecondary};
+  }
   &:focus-visible {
     outline: 2px solid ${(p) => p.theme.inputBorderFocused};
     outline-offset: 1px;
@@ -965,7 +970,7 @@ const Tag = styled.button<{ $active?: boolean }>`
 const Summary = styled.div`
   color: ${(p) => p.theme.textTertiary};
   font-size: 13px;
-  margin: 14px 0 6px;
+  margin: 10px 0 6px;
   strong {
     color: ${(p) => p.theme.text};
     font-weight: 600;
@@ -979,10 +984,10 @@ const List = styled.div`
 const Row = styled.div`
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 12px;
   padding: 13px 10px;
   border-bottom: 1px solid ${(p) => p.theme.divider};
-  border-radius: 6px;
+  border-radius: 5px;
   cursor: pointer;
   &:hover {
     background: ${(p) => p.theme.backgroundSecondary};
@@ -996,10 +1001,10 @@ const PaperIcon = styled.span`
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
-  border-radius: 7px;
+  border-radius: 6px;
   background: ${(p) => p.theme.backgroundSecondary};
   font-size: 16px;
 `;
@@ -1009,7 +1014,7 @@ const Main = styled.div`
 `;
 const Title = styled.div`
   color: ${(p) => p.theme.text};
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -1022,7 +1027,7 @@ const MetaLine = styled.div`
   flex-wrap: wrap;
   color: ${(p) => p.theme.textTertiary};
   font-size: 12px;
-  margin-top: 6px;
+  margin-top: 4px;
   svg {
     vertical-align: -2px;
   }
@@ -1129,7 +1134,7 @@ const ActiveFilter = styled.span`
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 7px;
+  padding: 3px 7px;
   border-radius: 6px;
   color: ${(p) => p.theme.accent};
   background: ${(p) => p.theme.backgroundSecondary};
@@ -1141,5 +1146,10 @@ const ActiveFilter = styled.span`
     cursor: pointer;
     font-size: 15px;
     line-height: 1;
+  }
+`;
+const ReadText = styled.span`
+  @media (max-width: 760px) {
+    display: none;
   }
 `;
