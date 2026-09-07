@@ -55,6 +55,7 @@ export default function Discuss() {
   const [category, setCategory] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [composing, setComposing] = React.useState(false);
+  const [creating, setCreating] = React.useState(false);
   const [title, setTitle] = React.useState("");
   const [selectedCategory, setSelectedCategory] = React.useState("");
   const [likes, setLikes] = React.useState(() => readLikes(scope));
@@ -117,9 +118,10 @@ export default function Discuss() {
   }, [topics.length]);
 
   const createTopic = async () => {
-    if (!title.trim()) {
+    if (!title.trim() || creating) {
       return;
     }
+    setCreating(true);
     try {
       const response = await client.post<{ data: Topic }>("/documents.create", {
         title: title.trim(),
@@ -143,6 +145,8 @@ export default function Discuss() {
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "发帖失败");
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -174,6 +178,8 @@ export default function Discuss() {
   };
 
   const visible = visibleTopics(topics, pins, { category, query });
+  const pinnedTopics = visible.filter((topic) => pins[topic.id]);
+  const regularTopics = visible.filter((topic) => !pins[topic.id]);
   const categoryNames = new Map(
     categories.map((item) => [item.id, item.title])
   );
@@ -184,6 +190,88 @@ export default function Discuss() {
       title: topic.title || "无标题",
     });
   };
+  const renderTopic = (topic: Topic) => (
+    <Row
+      key={topic.id}
+      role="button"
+      tabIndex={0}
+      onClick={() => openTopic(topic)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openTopic(topic);
+        }
+      }}
+    >
+      <Avatar aria-hidden>{(topic.createdBy?.name ?? "成").slice(0, 1)}</Avatar>
+      <TopicMain>
+        <TopicTitle>
+          {pins[topic.id] && <PinIcon size={13} aria-label="已置顶" />}
+          {topic.title || "无标题"}
+        </TopicTitle>
+        <TopicMeta>
+          <span>{topic.createdBy?.name ?? "成员"}</span>
+          {topic.createdAt && (
+            <span>· {new Date(topic.createdAt).toLocaleDateString()}</span>
+          )}
+          {topic.parentDocumentId &&
+            categoryNames.get(topic.parentDocumentId) && (
+              <TopicCategory>
+                {categoryNames.get(topic.parentDocumentId)}
+              </TopicCategory>
+            )}
+        </TopicMeta>
+      </TopicMain>
+      <RowActions>
+        <Tooltip
+          content={likes[topic.id] ? "取消点赞" : "点赞"}
+          placement="bottom"
+        >
+          <IconButton
+            type="button"
+            aria-label={likes[topic.id] ? "取消点赞" : "点赞"}
+            aria-pressed={!!likes[topic.id]}
+            $active={!!likes[topic.id]}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleLike(topic.id);
+            }}
+          >
+            <ThumbsUpIcon size={15} />
+          </IconButton>
+        </Tooltip>
+        <Tooltip
+          content={pins[topic.id] ? "取消置顶" : "置顶"}
+          placement="bottom"
+        >
+          <IconButton
+            type="button"
+            aria-label={pins[topic.id] ? "取消置顶" : "置顶"}
+            aria-pressed={!!pins[topic.id]}
+            $active={!!pins[topic.id]}
+            onClick={(event) => {
+              event.stopPropagation();
+              void togglePin(topic.id);
+            }}
+          >
+            <PinIcon size={15} />
+          </IconButton>
+        </Tooltip>
+        <Tooltip content="打开主题" placement="bottom">
+          <OpenButton
+            type="button"
+            aria-label="打开主题"
+            onClick={(event) => {
+              event.stopPropagation();
+              openTopic(topic);
+            }}
+          >
+            <OpenIcon size={15} />
+          </OpenButton>
+        </Tooltip>
+      </RowActions>
+    </Row>
+  );
 
   return (
     <Scene
@@ -245,6 +333,9 @@ export default function Discuss() {
                 if (event.key === "Enter") {
                   void createTopic();
                 }
+                if (event.key === "Escape") {
+                  setComposing(false);
+                }
               }}
               placeholder="用一句话写下讨论主题…"
             />
@@ -261,9 +352,9 @@ export default function Discuss() {
             </ComposerSelect>
             <ButtonSmall
               onClick={() => void createTopic()}
-              disabled={!title.trim()}
+              disabled={!title.trim() || creating}
             >
-              发布
+              {creating ? "发布中…" : "发布"}
             </ButtonSmall>
             <ButtonSmall neutral onClick={() => setComposing(false)}>
               取消
@@ -321,92 +412,12 @@ export default function Discuss() {
         <Empty>暂时没有匹配的讨论主题。</Empty>
       ) : (
         <List>
-          {visible.map((topic) => (
-            <Row
-              key={topic.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => openTopic(topic)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  openTopic(topic);
-                }
-              }}
-            >
-              <Avatar aria-hidden>
-                {(topic.createdBy?.name ?? "成").slice(0, 1)}
-              </Avatar>
-              <TopicMain>
-                <TopicTitle>
-                  {pins[topic.id] && <PinIcon size={13} aria-label="已置顶" />}
-                  {topic.title || "无标题"}
-                </TopicTitle>
-                <TopicMeta>
-                  <span>{topic.createdBy?.name ?? "成员"}</span>
-                  {topic.createdAt && (
-                    <span>
-                      · {new Date(topic.createdAt).toLocaleDateString()}
-                    </span>
-                  )}
-                  {topic.parentDocumentId &&
-                    categoryNames.get(topic.parentDocumentId) && (
-                      <TopicCategory>
-                        {categoryNames.get(topic.parentDocumentId)}
-                      </TopicCategory>
-                    )}
-                </TopicMeta>
-              </TopicMain>
-              <RowActions>
-                <Tooltip
-                  content={likes[topic.id] ? "取消点赞" : "点赞"}
-                  placement="bottom"
-                >
-                  <IconButton
-                    type="button"
-                    aria-label={likes[topic.id] ? "取消点赞" : "点赞"}
-                    aria-pressed={!!likes[topic.id]}
-                    $active={!!likes[topic.id]}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      toggleLike(topic.id);
-                    }}
-                  >
-                    <ThumbsUpIcon size={15} />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip
-                  content={pins[topic.id] ? "取消置顶" : "置顶"}
-                  placement="bottom"
-                >
-                  <IconButton
-                    type="button"
-                    aria-label={pins[topic.id] ? "取消置顶" : "置顶"}
-                    aria-pressed={!!pins[topic.id]}
-                    $active={!!pins[topic.id]}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void togglePin(topic.id);
-                    }}
-                  >
-                    <PinIcon size={15} />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip content="打开主题" placement="bottom">
-                  <OpenButton
-                    type="button"
-                    aria-label="打开主题"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      openTopic(topic);
-                    }}
-                  >
-                    <OpenIcon size={15} />
-                  </OpenButton>
-                </Tooltip>
-              </RowActions>
-            </Row>
-          ))}
+          {pinnedTopics.length > 0 && <GroupLabel>置顶讨论</GroupLabel>}
+          {pinnedTopics.map(renderTopic)}
+          {pinnedTopics.length > 0 && regularTopics.length > 0 && (
+            <GroupLabel>其他讨论</GroupLabel>
+          )}
+          {regularTopics.map(renderTopic)}
         </List>
       )}
     </Scene>
@@ -585,6 +596,14 @@ const List = styled.div`
   display: flex;
   flex-direction: column;
   border-top: 1px solid ${(p) => p.theme.divider};
+`;
+const GroupLabel = styled.div`
+  padding: 11px 10px 6px;
+  color: ${(p) => p.theme.textTertiary};
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 `;
 const Row = styled.div`
   display: flex;

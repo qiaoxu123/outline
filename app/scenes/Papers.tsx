@@ -196,6 +196,7 @@ export default function Papers() {
     () => !readPaperSnapshot(paperScope)
   );
   const [query, setQuery] = React.useState("");
+  const [refreshKey, setRefreshKey] = React.useState(0);
   const [scope, setScope] = React.useState<PaperScope>("all");
   const [readFilter, setReadFilter] = React.useState<ReadState | "">("");
   const [sort, setSort] = React.useState<PaperSort>("updated");
@@ -421,7 +422,7 @@ export default function Papers() {
     return () => {
       cancelled = true;
     };
-  }, [paperScope]);
+  }, [paperScope, refreshKey]);
 
   const allTags = React.useMemo(
     () =>
@@ -601,7 +602,7 @@ export default function Papers() {
       actions={
         <ButtonSmall
           neutral
-          onClick={() => window.location.reload()}
+          onClick={() => setRefreshKey((current) => current + 1)}
           aria-label="刷新论文库"
         >
           刷新
