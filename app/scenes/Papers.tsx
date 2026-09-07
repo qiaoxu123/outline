@@ -1,35 +1,39 @@
-import { AcademicCapIcon } from "outline-icons";
+import {
+  AcademicCapIcon,
+  CodeIcon,
+  EyeIcon,
+  OpenIcon,
+  StarredIcon,
+  ThumbsUpIcon,
+} from "outline-icons";
 import * as React from "react";
 import { useHistory } from "react-router-dom";
 import styled from "styled-components";
+import { toError } from "@shared/utils/error";
 import Empty from "~/components/Empty";
 import InputSearch from "~/components/InputSearch";
 import Scene from "~/components/Scene";
+import ButtonSmall from "~/components/ButtonSmall";
+import Tooltip from "~/components/Tooltip";
 import useStores from "~/hooks/useStores";
 import useCurrentUser from "~/hooks/useCurrentUser";
 import { client } from "~/utils/ApiClient";
+import Logger from "~/utils/Logger";
 import { openInTab } from "~/utils/tabNavigation";
 import {
   collectionDocuments,
   listCollections,
   type CustomDocument,
 } from "./customData";
-
-type Scope = "all" | "liked" | "history";
-type ReadState = "unread" | "reading" | "read";
-type Paper = CustomDocument & {
-  emoji?: string | null;
-  year?: number | null;
-  month?: number | null;
-  topic?: string | null;
-};
-type Meta = {
-  tags: string[];
-  venue: string | null;
-  link: string | null;
-  code: string | null;
-  enTitle: string | null;
-};
+import {
+  filterAndSortPapers,
+  type Meta,
+  type Paper,
+  type PaperScope,
+  type PaperSort,
+  type Rating,
+  type ReadState,
+} from "./PapersHelpers";
 
 const PAPER = "📖";
 const readKey = "outline.desktop.papers.read.v1";
@@ -45,18 +49,25 @@ type InteractionData = {
     Record<string, { like?: boolean; score?: number; at: string }>
   >;
 };
-type Rating = { average: number; count: number; mine: number | null };
 type PaperSnapshot = {
   savedAt: number;
   papers: Paper[];
   metas: Record<string, Meta>;
   complete?: boolean;
 };
+type WebdavResult = {
+  ok?: boolean;
+  data?: { found?: boolean; content?: string };
+};
+
+function asWebdavResult(value: unknown): WebdavResult {
+  return value && typeof value === "object" ? (value as WebdavResult) : {};
+}
 
 function readPaperSnapshot(scope: string): PaperSnapshot | null {
   try {
     const parsed = JSON.parse(
-      localStorage.getItem(`${paperCacheKey}.${scope}`) ?? "null",
+      localStorage.getItem(`${paperCacheKey}.${scope}`) ?? "null"
     ) as PaperSnapshot | null;
     return parsed && Array.isArray(parsed.papers) && parsed.metas
       ? parsed
@@ -89,16 +100,18 @@ function flatten(tree: CustomDocument[]): CustomDocument[] {
 function collectRecommendation(
   nodes: CustomDocument[],
   year: number | null = null,
-  month: number | null = null,
+  month: number | null = null
 ): Paper[] {
   return nodes.flatMap((node) => {
     const title = node.title.trim();
     const y = /^(\d{4})\s*年/.exec(title);
     const m = /^(\d{1,2})\s*月/.exec(title);
-    if (y)
+    if (y) {
       return collectRecommendation(node.children ?? [], Number(y[1]), month);
-    if (m)
+    }
+    if (m) {
       return collectRecommendation(node.children ?? [], year, Number(m[1]));
+    }
     return [{ ...node, year, month }];
   });
 }
@@ -106,15 +119,16 @@ function collectRecommendation(
 function collectFeatured(
   nodes: CustomDocument[],
   topic: string | null = null,
-  source = "featured",
+  source = "featured"
 ): Paper[] {
   return nodes.flatMap((node) => {
     const title = node.title.trim();
-    if (title.startsWith(PAPER))
+    if (title.startsWith(PAPER)) {
       return [
         { ...node, title, topic, source } as Paper,
         ...collectFeatured(node.children ?? [], topic, source),
       ];
+    }
     return collectFeatured(node.children ?? [], topic ?? title, source);
   });
 }
@@ -123,8 +137,9 @@ function parseMeta(text: string | undefined): Meta {
   const fields = new Map<string, string>();
   for (const line of (text ?? "").split("\n").slice(0, 45)) {
     const match = /^\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$/.exec(line.trim());
-    if (match && !/^[-\s:]+$/.test(match[1]))
+    if (match && !/^[-\s:]+$/.test(match[1])) {
       fields.set(match[1].trim(), match[2].trim());
+    }
   }
   const pick = (...keys: string[]) =>
     [...fields].find(([name]) => keys.some((key) => name.includes(key)))?.[1] ??
@@ -140,7 +155,7 @@ function parseMeta(text: string | undefined): Meta {
     "原标题",
     "英文题目",
     "论文标题",
-    "Title",
+    "Title"
   );
   return {
     tags: (pick("领域", "方向", "标签") ?? "")
@@ -172,18 +187,18 @@ export default function Papers() {
   const history = useHistory();
   const paperScope = auth.currentTeamId ?? window.location.host;
   const [papers, setPapers] = React.useState<Paper[]>(
-    () => readPaperSnapshot(paperScope)?.papers ?? [],
+    () => readPaperSnapshot(paperScope)?.papers ?? []
   );
   const [metas, setMetas] = React.useState<Record<string, Meta>>(
-    () => readPaperSnapshot(paperScope)?.metas ?? {},
+    () => readPaperSnapshot(paperScope)?.metas ?? {}
   );
   const [loading, setLoading] = React.useState(
-    () => !readPaperSnapshot(paperScope),
+    () => !readPaperSnapshot(paperScope)
   );
   const [query, setQuery] = React.useState("");
-  const [scope, setScope] = React.useState<Scope>("all");
+  const [scope, setScope] = React.useState<PaperScope>("all");
   const [readFilter, setReadFilter] = React.useState<ReadState | "">("");
-  const [sort, setSort] = React.useState("updated");
+  const [sort, setSort] = React.useState<PaperSort>("updated");
   const [tag, setTag] = React.useState<string | null>(null);
   const scopedReadKey = `${readKey}.${paperScope}`;
   const scopedLikesKey = `${likesKey}.${paperScope}`;
@@ -191,24 +206,29 @@ export default function Papers() {
   const [likes, setLikes] = React.useState(readMap(scopedLikesKey));
   const [ratings, setRatings] = React.useState<Record<string, Rating>>({});
   const [viewCounts, setViewCounts] = React.useState<Record<string, number>>(
-    {},
+    {}
   );
   const [viewed, setViewed] = React.useState<Record<string, string>>(() =>
-    readMap(`${readKey}.history.${auth.currentTeamId ?? window.location.host}`),
+    readMap(`${readKey}.history.${auth.currentTeamId ?? window.location.host}`)
   );
 
   React.useEffect(() => {
     let cancelled = false;
     window.DesktopBridge?.webdavGet(interactionPath)
-      .then((result: any) => {
-        if (cancelled || !result?.ok || !result.data?.found) return;
+      .then((value) => {
+        const result = asWebdavResult(value);
+        if (cancelled || !result?.ok || !result.data?.found) {
+          return;
+        }
         try {
-          const remote = JSON.parse(result.data.content) as InteractionData;
+          const remote = JSON.parse(
+            result.data.content ?? "{}"
+          ) as InteractionData;
           const next = Object.fromEntries(
             Object.entries(remote.papers ?? {}).map(([id, entries]) => [
               id,
-              !!entries[user?.id ?? ""]?.like,
-            ]),
+              entries[user?.id ?? ""]?.like ? "1" : "",
+            ])
           );
           const nextRatings = Object.fromEntries(
             Object.entries(remote.papers ?? {}).flatMap(([id, entries]) => {
@@ -229,7 +249,7 @@ export default function Papers() {
                     ],
                   ]
                 : [];
-            }),
+            })
           );
           setLikes(next);
           setRatings(nextRatings);
@@ -255,19 +275,20 @@ export default function Papers() {
           paper.id,
           (response.data?.views ?? []).reduce(
             (total, view) => total + (view.count ?? 1),
-            0,
+            0
           ),
         ] as const;
-      }),
+      })
     ).then((results) => {
-      if (!cancelled)
+      if (!cancelled) {
         setViewCounts(
           Object.fromEntries(
             results.flatMap((result) =>
-              result.status === "fulfilled" ? [result.value] : [],
-            ),
-          ),
+              result.status === "fulfilled" ? [result.value] : []
+            )
+          )
         );
+      }
     });
     return () => {
       cancelled = true;
@@ -293,22 +314,24 @@ export default function Papers() {
     }
     refreshingPaperScopes.add(paperScope);
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const collections = await listCollections();
         const trees = await Promise.all(
           collections.map(async (collection) => ({
             collection,
             tree: await collectionDocuments(collection.id),
-          })),
+          }))
         );
         const found: Paper[] = [];
         for (const { collection, tree } of trees) {
           const root = flatten(tree).find(
-            (item) => item.title.trim() === "推荐阅读",
+            (item) => item.title.trim() === "推荐阅读"
           );
-          if (root) found.push(...collectRecommendation(root.children ?? []));
-          if (collection.name.trim() === "组内工作")
+          if (root) {
+            found.push(...collectRecommendation(root.children ?? []));
+          }
+          if (collection.name.trim() === "组内工作") {
             found.push(
               ...flatten(tree)
                 .filter((item) => item.title.trim().startsWith(PAPER))
@@ -318,20 +341,22 @@ export default function Papers() {
                       ...item,
                       topic: "组内工作",
                       source: "internal",
-                    }) as Paper,
-                ),
+                    }) as Paper
+                )
             );
-          if (collection.name.trim() === "精选专题")
+          }
+          if (collection.name.trim() === "精选专题") {
             found.push(...collectFeatured(tree));
+          }
         }
         const search = await client.post<{ data: CustomDocument[] }>(
           "/documents.list",
-          { query: "📖", sort: "updatedAt", direction: "DESC", limit: 100 },
+          { query: "📖", sort: "updatedAt", direction: "DESC", limit: 100 }
         );
         found.push(
           ...((search.data ?? []).filter((item) =>
-            item.title.trim().startsWith(PAPER),
-          ) as Paper[]),
+            item.title.trim().startsWith(PAPER)
+          ) as Paper[])
         );
         const unique = [
           ...new Map(found.map((item) => [item.id, item])).values(),
@@ -365,7 +390,7 @@ export default function Papers() {
               } catch {
                 return [item.id, parseMeta(undefined)] as const;
               }
-            }),
+            })
           );
           for (const [id, meta] of batch) {
             nextMetas[id] = meta;
@@ -385,10 +410,12 @@ export default function Papers() {
           setMetas(nextMetas);
         }
       } catch (error) {
-        console.error("[papers] load failed", error);
+        Logger.error("Failed to load papers", toError(error));
       } finally {
         refreshingPaperScopes.delete(paperScope);
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     })();
     return () => {
@@ -400,44 +427,36 @@ export default function Papers() {
     () =>
       [...new Set(Object.values(metas).flatMap((meta) => meta.tags))].slice(
         0,
-        24,
+        24
       ),
-    [metas],
+    [metas]
   );
   const visible = React.useMemo(
     () =>
-      papers
-        .filter((paper) => {
-          const meta = metas[paper.id] ?? {};
-          const state = (read[paper.id] as ReadState | undefined) ?? "unread";
-          if (scope === "liked" && !likes[paper.id]) return false;
-          if (scope === "history" && !viewed[paper.id]) return false;
-          if (readFilter && state !== readFilter) return false;
-          if (tag && !meta.tags?.includes(tag)) return false;
-          const haystack =
-            `${paper.title} ${meta.enTitle ?? ""} ${meta.venue ?? ""} ${(meta.tags ?? []).join(" ")}`.toLowerCase();
-          return haystack.includes(query.trim().toLowerCase());
-        })
-        .sort((a, b) =>
-          sort === "title"
-            ? a.title.localeCompare(b.title, "zh")
-            : sort === "views"
-              ? (viewCounts[b.id] ?? 0) - (viewCounts[a.id] ?? 0)
-              : (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""),
-        ),
+      filterAndSortPapers({
+        papers,
+        metas,
+        read,
+        likes,
+        viewed,
+        viewCounts,
+        ratings,
+        options: { query, tag, readFilter, scope, sort },
+      }),
     [
       papers,
       metas,
-      query,
-      scope,
-      readFilter,
-      tag,
-      sort,
       read,
       likes,
       viewed,
       viewCounts,
-    ],
+      ratings,
+      query,
+      tag,
+      readFilter,
+      scope,
+      sort,
+    ]
   );
 
   const cycleRead = (id: string) => {
@@ -454,46 +473,60 @@ export default function Papers() {
     localStorage.setItem(scopedReadKey, JSON.stringify(next));
   };
   const toggleLike = (id: string) => {
-    if (!user) return;
+    if (!user) {
+      return;
+    }
     const next = { ...likes };
     const liked = !next[id];
-    if (liked) next[id] = "1";
-    else delete next[id];
+    if (liked) {
+      next[id] = "1";
+    } else {
+      delete next[id];
+    }
     setLikes(next);
     localStorage.setItem(scopedLikesKey, JSON.stringify(next));
     void (async () => {
       try {
-        const currentResult: any =
-          await window.DesktopBridge?.webdavGet(interactionPath);
+        const currentResult = asWebdavResult(
+          await window.DesktopBridge?.webdavGet(interactionPath)
+        );
         const current: InteractionData = currentResult?.data?.found
-          ? JSON.parse(currentResult.data.content)
+          ? JSON.parse(currentResult.data.content ?? "{}")
           : { version: 1, papers: {} };
-        const paper = { ...(current.papers[id] ?? {}) };
-        if (liked)
+        const paper = { ...current.papers[id] };
+        if (liked) {
           paper[user.id] = {
-            ...(paper[user.id] ?? {}),
+            ...paper[user.id],
             like: true,
             at: new Date().toISOString(),
           };
-        else {
-          const entry = { ...(paper[user.id] ?? {}) };
+        } else {
+          const entry = { ...paper[user.id] };
           delete entry.like;
-          if (entry.at) paper[user.id] = entry;
-          else delete paper[user.id];
+          if (entry.at) {
+            paper[user.id] = entry;
+          } else {
+            delete paper[user.id];
+          }
         }
-        if (Object.keys(paper).length) current.papers[id] = paper;
-        else delete current.papers[id];
+        if (Object.keys(paper).length) {
+          current.papers[id] = paper;
+        } else {
+          delete current.papers[id];
+        }
         await window.DesktopBridge?.webdavPut(
           interactionPath,
-          JSON.stringify(current, null, 2),
+          JSON.stringify(current, null, 2)
         );
       } catch (error) {
-        console.error("[papers] shared like write failed", error);
+        Logger.error("Failed to save paper like", toError(error));
       }
     })();
   };
   const setScore = (id: string) => {
-    if (!user) return;
+    if (!user) {
+      return;
+    }
     const current = ratings[id]?.mine ?? 0;
     const score = current >= 5 ? null : current + 1;
     setRatings((previous) => ({
@@ -502,28 +535,38 @@ export default function Papers() {
     }));
     void (async () => {
       try {
-        const result: any =
-          await window.DesktopBridge?.webdavGet(interactionPath);
+        const result = asWebdavResult(
+          await window.DesktopBridge?.webdavGet(interactionPath)
+        );
         const data: InteractionData = result?.data?.found
-          ? JSON.parse(result.data.content)
+          ? JSON.parse(result.data.content ?? "{}")
           : { version: 1, papers: {} };
-        const paper = { ...(data.papers[id] ?? {}) };
+        const paper = { ...data.papers[id] };
         const entry = {
-          ...(paper[user.id] ?? {}),
+          ...paper[user.id],
           at: new Date().toISOString(),
         };
-        if (score) entry.score = score;
-        else delete entry.score;
-        if (entry.like || entry.score) paper[user.id] = entry;
-        else delete paper[user.id];
-        if (Object.keys(paper).length) data.papers[id] = paper;
-        else delete data.papers[id];
+        if (score) {
+          entry.score = score;
+        } else {
+          delete entry.score;
+        }
+        if (entry.like || entry.score) {
+          paper[user.id] = entry;
+        } else {
+          delete paper[user.id];
+        }
+        if (Object.keys(paper).length) {
+          data.papers[id] = paper;
+        } else {
+          delete data.papers[id];
+        }
         await window.DesktopBridge?.webdavPut(
           interactionPath,
-          JSON.stringify(data, null, 2),
+          JSON.stringify(data, null, 2)
         );
       } catch (error) {
-        console.error("[papers] shared score write failed", error);
+        Logger.error("Failed to save paper score", toError(error));
       }
     })();
   };
@@ -532,7 +575,7 @@ export default function Papers() {
     setViewed(nextViewed);
     localStorage.setItem(
       `${readKey}.history.${auth.currentTeamId ?? window.location.host}`,
-      JSON.stringify(nextViewed),
+      JSON.stringify(nextViewed)
     );
     setViewCounts((current) => ({
       ...current,
@@ -550,23 +593,40 @@ export default function Papers() {
   };
 
   return (
-    <Scene icon={<AcademicCapIcon />} title="论文库" textTitle="论文库" wide>
+    <Scene
+      icon={<AcademicCapIcon />}
+      title="论文库"
+      textTitle="论文库"
+      wide
+      actions={
+        <ButtonSmall
+          neutral
+          onClick={() => window.location.reload()}
+          aria-label="刷新论文库"
+        >
+          刷新
+        </ButtonSmall>
+      }
+    >
       <FeatureHeader>
         <div>
           <FeatureTitle>论文库</FeatureTitle>
           <FeatureHint>
-            汇总推荐阅读、精选专题与组内工作，支持按领域、阅读状态和互动记录筛选。
+            汇总推荐阅读、精选专题与组内工作，按领域、状态和互动记录快速定位。
           </FeatureHint>
         </div>
         <FeatureStats>
-          {papers.length ? `共 ${papers.length} 篇` : "正在准备论文索引"}
+          {papers.length ? `${papers.length} 篇论文` : "准备索引中"}
         </FeatureStats>
       </FeatureHeader>
       <Toolbar>
-        <ScopeBar>
-          {(["all", "liked", "history"] as Scope[]).map((item) => (
+        <ScopeBar role="tablist" aria-label="论文范围">
+          {(["all", "liked", "history"] as PaperScope[]).map((item) => (
             <ScopeButton
               key={item}
+              type="button"
+              role="tab"
+              aria-selected={scope === item}
               $active={scope === item}
               onClick={() => setScope(item)}
             >
@@ -574,38 +634,65 @@ export default function Papers() {
                 ? "全部"
                 : item === "liked"
                   ? `我赞过 · ${Object.keys(likes).length}`
-                  : "最近浏览"}
+                  : `最近浏览 · ${Object.keys(viewed).length}`}
             </ScopeButton>
           ))}
         </ScopeBar>
-        <InputSearch
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索标题、作者、领域或会议…"
-        />
+        <SearchBox>
+          <InputSearch
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索标题、作者、领域或会议…"
+          />
+        </SearchBox>
       </Toolbar>
-      <Filters>
-        <select
-          value={readFilter}
-          onChange={(event) =>
-            setReadFilter(event.target.value as ReadState | "")
-          }
-        >
-          <option value="">全部阅读状态</option>
-          <option value="unread">未读</option>
-          <option value="reading">在读</option>
-          <option value="read">已读</option>
-        </select>
-        <select value={sort} onChange={(event) => setSort(event.target.value)}>
-          <option value="updated">更新时间 新→旧</option>
-          <option value="views">阅读次数 多→少</option>
-          <option value="title">标题 A→Z</option>
-        </select>
+      <Filters aria-label="论文筛选">
+        <FilterLabel>
+          阅读状态
+          <select
+            value={readFilter}
+            onChange={(event) =>
+              setReadFilter(event.target.value as ReadState | "")
+            }
+          >
+            <option value="">全部</option>
+            <option value="unread">未读</option>
+            <option value="reading">在读</option>
+            <option value="read">已读</option>
+          </select>
+        </FilterLabel>
+        <FilterLabel>
+          排序
+          <select
+            value={sort}
+            onChange={(event) => setSort(event.target.value as PaperSort)}
+          >
+            <option value="updated">更新时间 新→旧</option>
+            <option value="views">阅读量 多→少</option>
+            <option value="likes">点赞优先</option>
+            <option value="score">评分优先</option>
+            <option value="title">标题 A→Z</option>
+          </select>
+        </FilterLabel>
+        {tag && (
+          <ActiveFilter>
+            标签：{tag}
+            <button
+              type="button"
+              onClick={() => setTag(null)}
+              aria-label="清除标签筛选"
+            >
+              ×
+            </button>
+          </ActiveFilter>
+        )}
       </Filters>
       {allTags.length > 0 && (
-        <TagBar>
+        <TagBar aria-label="热门领域标签">
+          <TagHeading>热门领域</TagHeading>
           {allTags.map((item) => (
             <Tag
+              type="button"
               key={item}
               $active={tag === item}
               onClick={() => setTag(tag === item ? null : item)}
@@ -616,30 +703,52 @@ export default function Papers() {
         </TagBar>
       )}
       <Summary>
-        共 {visible.length} 篇 · 已读{" "}
+        <strong>{visible.length}</strong> 篇匹配 · 已读{" "}
         {Object.values(read).filter((value) => value === "read").length} 篇
+        {scope === "history" && <span> · 按最近浏览排序</span>}
       </Summary>
       {loading ? (
         <Empty>正在加载论文库…</Empty>
       ) : visible.length === 0 ? (
-        <Empty>没有匹配的论文。</Empty>
+        <Empty>没有匹配的论文。可以清除筛选条件后再试。</Empty>
       ) : (
         <List>
           {visible.map((paper) => {
             const meta = metas[paper.id] ?? { tags: [] };
             const state = read[paper.id] ?? "unread";
+            const source =
+              paper.source === "internal"
+                ? "组内工作"
+                : paper.source === "featured"
+                  ? (paper.topic ?? "精选专题")
+                  : paper.year
+                    ? `${paper.year} · ${paper.month ?? "?"}月`
+                    : null;
             return (
-              <Row key={paper.id} onClick={() => open(paper)}>
+              <Row
+                key={paper.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => open(paper)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    open(paper);
+                  }
+                }}
+              >
+                <PaperIcon aria-hidden>{paper.emoji ?? "📖"}</PaperIcon>
                 <Main>
-                  <Title>
-                    {paper.emoji ?? "📖"} {paper.title.replace(/^📖\s*/, "")}
-                  </Title>
+                  <Title>{paper.title.replace(/^📖\s*/, "")}</Title>
                   <MetaLine>
-                    {meta.enTitle && <span>{meta.enTitle}</span>}
+                    {source && <MetaPill>{source}</MetaPill>}
                     {meta.venue && <span>{meta.venue}</span>}
-                    <span>{viewCounts[paper.id] ?? 0} 次阅读</span>
+                    <span>
+                      <EyeIcon size={13} /> {viewCounts[paper.id] ?? 0}
+                    </span>
                     {meta.tags?.slice(0, 4).map((item) => (
                       <Tag
+                        type="button"
                         key={item}
                         onClick={(event) => {
                           event.stopPropagation();
@@ -650,57 +759,80 @@ export default function Papers() {
                       </Tag>
                     ))}
                   </MetaLine>
+                  {meta.enTitle && <EnglishTitle>{meta.enTitle}</EnglishTitle>}
                 </Main>
                 <Actions>
-                  <LikeButton
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      toggleLike(paper.id);
-                    }}
-                    $active={!!likes[paper.id]}
+                  <Tooltip
+                    content={likes[paper.id] ? "取消点赞" : "点赞"}
+                    placement="bottom"
                   >
-                    ♥ {likes[paper.id] ? "已赞" : "点赞"}
-                  </LikeButton>
-                  <ScoreButton
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setScore(paper.id);
-                    }}
-                    $active={!!ratings[paper.id]?.mine}
-                    title="点击评分，循环 1–5 星；第 5 次后清除评分"
-                  >
-                    ★{" "}
-                    {ratings[paper.id]?.average
-                      ? ratings[paper.id].average.toFixed(1)
-                      : "评分"}
-                  </ScoreButton>
-                  {meta.link && (
-                    <a
-                      href={meta.link}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={(event) => event.stopPropagation()}
+                    <IconButton
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleLike(paper.id);
+                      }}
+                      $active={!!likes[paper.id]}
+                      aria-label={likes[paper.id] ? "取消点赞" : "点赞"}
                     >
-                      原文
-                    </a>
+                      <ThumbsUpIcon size={15} />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip
+                    content="点击循环评分，5 星后清除"
+                    placement="bottom"
+                  >
+                    <IconButton
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setScore(paper.id);
+                      }}
+                      $active={!!ratings[paper.id]?.mine}
+                      aria-label={`评分 ${ratings[paper.id]?.average?.toFixed(1) ?? "未评分"}`}
+                    >
+                      <StarredIcon size={15} />
+                      {ratings[paper.id]?.average ? (
+                        <Count>{ratings[paper.id].average.toFixed(1)}</Count>
+                      ) : null}
+                    </IconButton>
+                  </Tooltip>
+                  {meta.link && (
+                    <Tooltip content="打开论文原文" placement="bottom">
+                      <IconLink
+                        href={meta.link}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(event) => event.stopPropagation()}
+                        aria-label="打开论文原文"
+                      >
+                        <OpenIcon size={15} />
+                      </IconLink>
+                    </Tooltip>
                   )}
                   {meta.code && (
-                    <a
-                      href={meta.code}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      代码
-                    </a>
+                    <Tooltip content="打开代码仓库" placement="bottom">
+                      <IconLink
+                        href={meta.code}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(event) => event.stopPropagation()}
+                        aria-label="打开代码仓库"
+                      >
+                        <CodeIcon size={15} />
+                      </IconLink>
+                    </Tooltip>
                   )}
                   <ReadButton
+                    type="button"
                     onClick={(event) => {
                       event.stopPropagation();
                       cycleRead(paper.id);
                     }}
                     $state={state}
+                    aria-label={`阅读状态：${state === "read" ? "已读" : state === "reading" ? "在读" : "未读"}`}
                   >
+                    <ReadDot $state={state} />
                     {state === "read"
                       ? "已读"
                       : state === "reading"
@@ -719,9 +851,9 @@ export default function Papers() {
 
 const Toolbar = styled.div`
   display: flex;
-  gap: 16px;
+  gap: 12px;
   align-items: center;
-  margin: 20px 0 12px;
+  margin: 18px 0 12px;
   @media (max-width: 700px) {
     flex-direction: column;
     align-items: stretch;
@@ -732,90 +864,150 @@ const FeatureHeader = styled.div`
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin: 22px 0 16px;
+  margin: 18px 0 12px;
 `;
 const FeatureTitle = styled.h2`
   margin: 0 0 4px;
-  font-size: 24px;
+  font-size: 20px;
   letter-spacing: -0.02em;
 `;
 const FeatureHint = styled.p`
   margin: 0;
   color: ${(props) => props.theme.textTertiary};
-  font-size: 14px;
+  font-size: 13px;
 `;
 const FeatureStats = styled.div`
   flex-shrink: 0;
   color: ${(props) => props.theme.textTertiary};
   font-size: 13px;
-  padding-top: 6px;
+  padding-top: 4px;
 `;
 const ScopeBar = styled.div`
   display: flex;
-  gap: 4px;
+  gap: 2px;
   flex-shrink: 0;
+  padding: 3px;
+  border-radius: 8px;
+  background: ${(p) => p.theme.backgroundSecondary};
 `;
 const ScopeButton = styled.button<{ $active: boolean }>`
   border: 0;
   border-radius: 6px;
-  padding: 7px 10px;
+  padding: 6px 10px;
   color: ${(p) => (p.$active ? p.theme.text : p.theme.textTertiary)};
-  background: ${(p) => (p.$active ? p.theme.surface : "transparent")};
+  background: ${(p) => (p.$active ? p.theme.background : "transparent")};
+  box-shadow: ${(p) => (p.$active ? "0 1px 2px rgba(0, 0, 0, 0.08)" : "none")};
+  font-size: 13px;
   cursor: pointer;
+  &:hover {
+    color: ${(p) => p.theme.text};
+  }
+  &:focus-visible {
+    outline: 2px solid ${(p) => p.theme.inputBorderFocused};
+    outline-offset: -1px;
+  }
+`;
+const SearchBox = styled.div`
+  flex: 1;
+  min-width: 180px;
 `;
 const Filters = styled.div`
   display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid ${(p) => p.theme.divider};
+`;
+const FilterLabel = styled.label`
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: ${(p) => p.theme.textTertiary};
+  font-size: 12px;
   select {
     border: 1px solid ${(p) => p.theme.divider};
     border-radius: 6px;
-    padding: 7px 9px;
+    padding: 6px 9px;
     color: ${(p) => p.theme.text};
     background: ${(p) => p.theme.background};
+    font: inherit;
+    cursor: pointer;
   }
 `;
 const TagBar = styled.div`
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 16px;
+  align-items: center;
+  margin-bottom: 12px;
+`;
+const TagHeading = styled.span`
+  color: ${(p) => p.theme.textTertiary};
+  font-size: 12px;
+  margin-right: 2px;
 `;
 const Tag = styled.button<{ $active?: boolean }>`
-  border: 1px solid ${(p) => (p.$active ? p.theme.primary : p.theme.divider)};
+  border: 1px solid ${(p) => (p.$active ? p.theme.accent : p.theme.divider)};
   border-radius: 999px;
   padding: 3px 8px;
-  color: ${(p) => (p.$active ? p.theme.primary : p.theme.textTertiary)};
+  color: ${(p) => (p.$active ? p.theme.accent : p.theme.textTertiary)};
   background: transparent;
   cursor: pointer;
   font-size: 12px;
+  &:focus-visible {
+    outline: 2px solid ${(p) => p.theme.inputBorderFocused};
+    outline-offset: 1px;
+  }
 `;
 const Summary = styled.div`
   color: ${(p) => p.theme.textTertiary};
   font-size: 13px;
-  margin-bottom: 8px;
+  margin: 14px 0 6px;
+  strong {
+    color: ${(p) => p.theme.text};
+    font-weight: 600;
+  }
 `;
 const List = styled.div`
   display: flex;
   flex-direction: column;
+  border-top: 1px solid ${(p) => p.theme.divider};
 `;
 const Row = styled.div`
   display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 12px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 10px;
   border-bottom: 1px solid ${(p) => p.theme.divider};
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
   &:hover {
-    background: ${(p) => p.theme.surface};
+    background: ${(p) => p.theme.backgroundSecondary};
   }
+  &:focus-visible {
+    outline: 2px solid ${(p) => p.theme.inputBorderFocused};
+    outline-offset: -2px;
+  }
+`;
+const PaperIcon = styled.span`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: ${(p) => p.theme.backgroundSecondary};
+  font-size: 16px;
 `;
 const Main = styled.div`
   min-width: 0;
   flex: 1;
 `;
 const Title = styled.div`
+  color: ${(p) => p.theme.text};
   font-size: 15px;
   font-weight: 600;
   white-space: nowrap;
@@ -824,44 +1016,129 @@ const Title = styled.div`
 `;
 const MetaLine = styled.div`
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   flex-wrap: wrap;
   color: ${(p) => p.theme.textTertiary};
   font-size: 12px;
   margin-top: 6px;
+  svg {
+    vertical-align: -2px;
+  }
+`;
+const MetaPill = styled.span`
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: ${(p) => p.theme.textSecondary};
+  background: ${(p) => p.theme.backgroundSecondary};
+`;
+const EnglishTitle = styled.div`
+  overflow: hidden;
+  margin-top: 5px;
+  color: ${(p) => p.theme.textTertiary};
+  font-size: 12px;
+  font-style: italic;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 `;
 const Actions = styled.div`
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
   flex-shrink: 0;
-  a {
-    color: ${(p) => p.theme.textTertiary};
-    font-size: 12px;
+`;
+const IconButton = styled.button<{ $active: boolean }>`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: ${(p) => (p.$active ? p.theme.accent : p.theme.textTertiary)};
+  cursor: pointer;
+  &:hover {
+    color: ${(p) => p.theme.text};
+    background: ${(p) => p.theme.backgroundTertiary};
+  }
+  &:focus-visible {
+    outline: 2px solid ${(p) => p.theme.inputBorderFocused};
+    outline-offset: -1px;
   }
 `;
-const LikeButton = styled.button<{ $active: boolean }>`
-  border: 0;
-  background: transparent;
-  color: ${(p) => (p.$active ? p.theme.primary : p.theme.textTertiary)};
+const IconLink = styled.a`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  color: ${(p) => p.theme.textTertiary};
   cursor: pointer;
-  font-size: 12px;
+  &:hover {
+    color: ${(p) => p.theme.text};
+    background: ${(p) => p.theme.backgroundTertiary};
+  }
+  &:focus-visible {
+    outline: 2px solid ${(p) => p.theme.inputBorderFocused};
+    outline-offset: -1px;
+  }
 `;
-const ScoreButton = styled.button<{ $active: boolean }>`
-  border: 0;
-  background: transparent;
-  color: ${(p) => (p.$active ? p.theme.primary : p.theme.textTertiary)};
-  cursor: pointer;
-  font-size: 12px;
+const Count = styled.span`
+  font-size: 11px;
 `;
 const ReadButton = styled.button<{ $state: string }>`
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px;
   border: 1px solid
     ${(p) => (p.$state === "read" ? p.theme.success : p.theme.divider)};
-  color: ${(p) => p.theme.text};
+  color: ${(p) =>
+    p.$state === "read" ? p.theme.success : p.theme.textTertiary};
   background: transparent;
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 4px 8px;
   cursor: pointer;
   font-size: 12px;
+  &:hover {
+    background: ${(p) => p.theme.backgroundTertiary};
+  }
+  &:focus-visible {
+    outline: 2px solid ${(p) => p.theme.inputBorderFocused};
+    outline-offset: 1px;
+  }
+`;
+const ReadDot = styled.span<{ $state: string }>`
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: ${(p) =>
+    p.$state === "read"
+      ? p.theme.success
+      : p.$state === "reading"
+        ? p.theme.warning
+        : p.theme.textTertiary};
+`;
+const ActiveFilter = styled.span`
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px;
+  border-radius: 6px;
+  color: ${(p) => p.theme.accent};
+  background: ${(p) => p.theme.backgroundSecondary};
+  font-size: 12px;
+  button {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+  }
 `;
