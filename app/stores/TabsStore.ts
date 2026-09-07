@@ -12,6 +12,30 @@ export interface Tab {
 type StoredTabs = Record<string, Tab[]>;
 const STORAGE_KEY = "outline.desktop.tabs.v1";
 
+function tabIdentity(tab: Pick<Tab, "id" | "url">): string {
+  return tab.url.startsWith("/doc/")
+    ? tab.url.replace(/\/edit$/, "")
+    : tab.id;
+}
+
+function normalizeTabs(tabs: Tab[]): Tab[] {
+  const byIdentity = new Map<string, Tab[]>();
+  for (const tab of tabs) {
+    const id = tabIdentity(tab);
+    byIdentity.set(id, [...(byIdentity.get(id) ?? []), tab]);
+  }
+  return Array.from(byIdentity.entries()).map(([id, entries]) => {
+    const tab = entries[entries.length - 1];
+    return entries.length === 1
+      ? tab
+      : {
+          ...tab,
+          id,
+          pinned: entries.some((entry) => entry.pinned),
+        };
+  });
+}
+
 function readStoredTabs(): StoredTabs {
   try {
     const value = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
@@ -24,7 +48,12 @@ function readStoredTabs(): StoredTabs {
 export default class TabsStore {
   private rootStore: RootStore;
   @observable
-  private stored: StoredTabs = readStoredTabs();
+  private stored: StoredTabs = Object.fromEntries(
+    Object.entries(readStoredTabs()).map(([scope, tabs]) => [
+      scope,
+      normalizeTabs(tabs),
+    ])
+  );
 
   constructor(rootStore: RootStore) {
     this.rootStore = rootStore;
@@ -52,8 +81,12 @@ export default class TabsStore {
 
   @action
   open(tab: Omit<Tab, "pinned"> & { pinned?: boolean }): void {
-    if (this.tabs.some((item) => item.id === tab.id)) return;
-    this.setTabs([...this.tabs, { ...tab, pinned: tab.pinned ?? false }]);
+    const normalized = {
+      ...tab,
+      pinned: tab.pinned ?? false,
+    };
+    if (this.tabs.some((item) => tabIdentity(item) === tabIdentity(normalized))) return;
+    this.setTabs([...this.tabs, normalized]);
   }
 
   @action

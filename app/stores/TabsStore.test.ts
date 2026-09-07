@@ -40,4 +40,34 @@ describe("TabsStore", () => {
     expect(store.close("doc-b")).toBe("doc-c");
     expect(store.close("doc-c")).toBe("doc-a");
   });
+
+  test("migrates legacy tabs that represent the same document URL", () => {
+    localStorage.setItem(
+      "outline.desktop.tabs.v1",
+      JSON.stringify({
+        "team-a": [
+          { id: "document-id", url: "/doc/science-guide", title: "Science guide", pinned: false },
+          { id: "/doc/science-guide/edit", url: "/doc/science-guide/edit", title: "Science guide", pinned: false },
+        ],
+      })
+    );
+
+    const store = createStore();
+
+    expect(store.tabs).toHaveLength(1);
+    expect(store.tabs[0].id).toBe("/doc/science-guide");
+  });
+
+  test("deduplicates a document opened in read and edit mode", () => {
+    const store = createStore();
+    store.open({ id: "/doc/abc", url: "/doc/abc", title: "ABC" });
+    store.open({
+      id: "/doc/abc/edit",
+      url: "/doc/abc/edit",
+      title: "ABC",
+    });
+
+    expect(store.tabs).toHaveLength(1);
+    expect(store.tabs[0].id).toBe("/doc/abc");
+  });
 });
