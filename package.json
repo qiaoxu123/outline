@@ -34,7 +34,7 @@
     "test:server": "TZ=UTC vitest run --project server",
     "test:watch": "TZ=UTC vitest",
     "vite:dev": "VITE_CJS_IGNORE_WARNING=true vite",
-    "vite:build": "VITE_CJS_IGNORE_WARNING=true vite build",
+    "vite:build": "vite build",
     "vite:preview": "VITE_CJS_IGNORE_WARNING=true vite preview"
   },
   "funding": {
