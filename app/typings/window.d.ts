@@ -65,6 +65,14 @@ declare global {
        */
       addCustomHost: (host: string) => Promise<void>;
 
+      /** Reads and updates the server-directory pointer used by 个人空间. */
+      getPersonalNotesRoot: () => Promise<unknown>;
+      setPersonalNotesRoot: (root: {
+        docId: string;
+        collectionId: string;
+      }) => Promise<unknown>;
+      clearPersonalNotesRoot: () => Promise<unknown>;
+
       /** Shared desktop storage for profile-scoped extensions. */
       webdavGet: (path: string) => Promise<unknown>;
       webdavPut: (path: string, content: string) => Promise<unknown>;

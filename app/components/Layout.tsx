@@ -51,7 +51,7 @@ const Layout = React.forwardRef(function Layout_(
         <SkipNavContent />
         <Content
           auto
-          justify="center"
+          justify="flex-start"
           role="main"
           $isResizing={ui.sidebarIsResizing}
           $sidebarCollapsed={sidebarCollapsed}
@@ -89,6 +89,8 @@ type ContentProps = {
 
 const Content = styled(Flex)<ContentProps>`
   margin: 0;
+  flex-direction: column;
+  align-items: stretch;
   transition: ${(props) =>
     props.$isResizing ? "none" : `margin-inline-start 100ms ease-out`};
 

@@ -474,6 +474,13 @@ type MainProps = {
 
 const Main = styled.div<MainProps>`
   margin-top: 4px;
+  width: 100%;
+  margin-inline: auto;
+
+  ${breakpoint("desktopLarge")`
+    width: 80vw;
+    flex-shrink: 0;
+  `};
 
   ${breakpoint("tablet")`
     display: grid;

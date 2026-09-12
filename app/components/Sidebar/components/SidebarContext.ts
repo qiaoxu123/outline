@@ -6,6 +6,7 @@ export type SidebarContextType =
   | "collections"
   | "shared"
   | "archive"
+  | "personal-notes"
   | `group-${string}`
   | `starred-${string}`
   | undefined;
@@ -19,6 +20,28 @@ export const groupSidebarContext = (groupId: string): SidebarContextType =>
 
 export const starredSidebarContext = (modelId: string): SidebarContextType =>
   `starred-${modelId}`;
+
+export function activeDocumentIdForSidebarTree(
+  activeDocumentId: string | undefined,
+  activeContext: SidebarContextType,
+  treeContext: SidebarContextType
+): string | undefined {
+  if (!activeDocumentId) {
+    return undefined;
+  }
+  return activeContext === treeContext ||
+    (!activeContext && treeContext === "collections")
+    ? activeDocumentId
+    : undefined;
+}
+
+export function isActiveInSidebarContext(
+  pathMatches: boolean,
+  activeContext: SidebarContextType,
+  linkContext: SidebarContextType
+): boolean {
+  return pathMatches && activeContext === linkContext;
+}
 
 export const determineSidebarContext = ({
   document,

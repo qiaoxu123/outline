@@ -1,5 +1,11 @@
 import { observer } from "mobx-react";
-import { SearchIcon, HomeIcon, SidebarIcon, AcademicCapIcon, CommentIcon, NotepadIcon } from "outline-icons";
+import {
+  SearchIcon,
+  HomeIcon,
+  SidebarIcon,
+  AcademicCapIcon,
+  CommentIcon,
+} from "outline-icons";
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
   DragActiveProvider,
@@ -24,6 +30,7 @@ import TeamLogo from "../TeamLogo";
 import Tooltip from "../Tooltip";
 import Sidebar from "./Sidebar";
 import ArchiveLink from "./components/ArchiveLink";
+import { buildAppSidebarLayout } from "./AppSidebarLayout";
 import Collections from "./components/Collections";
 import DraggableSection, {
   normalizeSidebarSectionOrder,
@@ -31,6 +38,7 @@ import DraggableSection, {
 import DragPlaceholder from "./components/DragPlaceholder";
 import { DismissableSidebarAction } from "./components/DismissableSidebarAction";
 import HistoryNavigation from "./components/HistoryNavigation";
+import PersonalNotes from "./components/PersonalNotes";
 import Section from "./components/Section";
 import SharedWithMe from "./components/SharedWithMe";
 import SidebarButton from "./components/SidebarButton";
@@ -78,6 +86,7 @@ function AppSidebar() {
   const sectionOrder = normalizeSidebarSectionOrder(
     user.getPreference(UserPreference.SidebarSectionOrder, [])
   );
+  const sidebarLayout = buildAppSidebarLayout(sectionOrder);
 
   const sectionContent = {
     [SidebarSection.Starred]: <Starred />,
@@ -138,19 +147,34 @@ function AppSidebar() {
                 onClick={handleSearchClick}
                 onClickIntent={Scenes.Search.preload}
               />
-              <QuickNavLink to="/personal-notes" icon={<NotepadIcon />} iconOnly label="个人笔记" exact />
-              <QuickNavLink to="/papers" icon={<AcademicCapIcon />} iconOnly label="论文库" exact />
-              <QuickNavLink to="/discuss" icon={<CommentIcon />} iconOnly label="讨论区" exact />
+              <QuickNavLink
+                to="/papers"
+                icon={<AcademicCapIcon />}
+                iconOnly
+                label="论文库"
+                exact
+              />
+              <QuickNavLink
+                to="/discuss"
+                icon={<CommentIcon />}
+                iconOnly
+                label="讨论区"
+                exact
+              />
             </QuickNav>
           </Section>
         </Overflow>
         <Scrollable flex shadow ref={scrollRef}>
           <SidebarScrollProvider value={scrollArea}>
-            {sectionOrder.map((section) => (
-              <DraggableSection key={section} section={section}>
-                {sectionContent[section]}
-              </DraggableSection>
-            ))}
+            {sidebarLayout.items.map((item) =>
+              item.kind === "personal-notes" ? (
+                <PersonalNotes key="personal-notes" />
+              ) : (
+                <DraggableSection key={item.section} section={item.section}>
+                  {sectionContent[item.section]}
+                </DraggableSection>
+              )
+            )}
             {can.createDocument && (
               <Section auto>
                 <ArchiveLink />
@@ -198,20 +222,33 @@ const QuickNavLink = styled(SidebarLink).attrs({
   box-shadow: none !important;
   overflow: visible;
 
+  &:hover,
+  &:active {
+    --background: transparent;
+  }
+
   &[aria-current="page"] {
     color: ${(props) => props.theme.text};
   }
 
   &[aria-current="page"] ${IconWrapper} {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
-    margin: -4px;
-    border-radius: 8px;
-    background: ${(props) => props.theme.sidebarHoverBackground};
-    box-shadow: 0 2px 8px ${(props) => props.theme.shadow};
+    overflow: visible;
+
+    &::after {
+      content: "";
+      position: absolute;
+      inset-inline-start: 50%;
+      bottom: -5px;
+      width: 14px;
+      height: 2px;
+      border-radius: 2px;
+      background: ${(props) => props.theme.accent};
+      transform: translateX(-50%);
+    }
   }
 `;
 

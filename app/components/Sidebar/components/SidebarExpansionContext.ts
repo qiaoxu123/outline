@@ -46,6 +46,8 @@ export class SidebarExpansionState {
   @observable
   expandedIds = new Set<string>();
 
+  private autoExpandedIds = new Set<string>();
+
   /**
    * Whether a given node is currently expanded.
    *
@@ -64,6 +66,7 @@ export class SidebarExpansionState {
   @action
   expand(nodeId: string): void {
     this.expandedIds.add(nodeId);
+    this.autoExpandedIds.delete(nodeId);
   }
 
   /**
@@ -74,6 +77,7 @@ export class SidebarExpansionState {
   @action
   collapse(nodeId: string): void {
     this.expandedIds.delete(nodeId);
+    this.autoExpandedIds.delete(nodeId);
   }
 
   /**
@@ -85,6 +89,7 @@ export class SidebarExpansionState {
   expandDescendants(node: NavigationNode): void {
     const walk = (n: NavigationNode) => {
       this.expandedIds.add(n.id);
+      this.autoExpandedIds.delete(n.id);
       for (const child of n.children) {
         walk(child);
       }
@@ -101,6 +106,7 @@ export class SidebarExpansionState {
   collapseDescendants(node: NavigationNode): void {
     const walk = (n: NavigationNode) => {
       this.expandedIds.delete(n.id);
+      this.autoExpandedIds.delete(n.id);
       for (const child of n.children) {
         walk(child);
       }
@@ -114,10 +120,24 @@ export class SidebarExpansionState {
    * @param ids the node IDs to expand.
    */
   @action
-  expandPath(ids: Iterable<string>): void {
-    for (const id of ids) {
-      this.expandedIds.add(id);
+  syncAutoExpandedPath(ids: Iterable<string>): void {
+    const path = new Set(ids);
+    for (const id of this.autoExpandedIds) {
+      if (!path.has(id)) {
+        this.expandedIds.delete(id);
+      }
     }
+
+    const nextAutoExpandedIds = new Set<string>();
+    for (const id of path) {
+      if (!this.expandedIds.has(id)) {
+        this.expandedIds.add(id);
+        nextAutoExpandedIds.add(id);
+      } else if (this.autoExpandedIds.has(id)) {
+        nextAutoExpandedIds.add(id);
+      }
+    }
+    this.autoExpandedIds = nextAutoExpandedIds;
   }
 
   /**
@@ -130,6 +150,7 @@ export class SidebarExpansionState {
     const walk = (nodes: NavigationNode[]) => {
       for (const node of nodes) {
         this.expandedIds.add(node.id);
+        this.autoExpandedIds.delete(node.id);
         walk(node.children);
       }
     };
@@ -142,6 +163,7 @@ export class SidebarExpansionState {
   @action
   collapseAll(): void {
     this.expandedIds.clear();
+    this.autoExpandedIds.clear();
   }
 }
 
@@ -185,13 +207,13 @@ export function useSidebarExpansionState(
   const [state] = useState(() => new SidebarExpansionState());
 
   useEffect(() => {
-    if (!roots || !activeDocumentId) {
+    if (!roots) {
       return;
     }
-    const path = computeAncestorPath(roots, activeDocumentId);
-    if (path.length > 0) {
-      state.expandPath(path);
-    }
+    const path = activeDocumentId
+      ? computeAncestorPath(roots, activeDocumentId)
+      : [];
+    state.syncAutoExpandedPath(path);
   }, [state, roots, activeDocumentId]);
 
   return state;

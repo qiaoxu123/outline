@@ -1,4 +1,5 @@
 import type { History } from "history";
+import type { SidebarContextType } from "~/components/Sidebar/components/SidebarContext";
 import type TabsStore from "~/stores/TabsStore";
 
 type OpenTab = {
@@ -7,6 +8,7 @@ type OpenTab = {
   title: string;
   emoji?: string | null;
   pinned?: boolean;
+  sidebarContext?: SidebarContextType;
 };
 
 /** Return the stable tab identity for a document, independent of view/edit mode. */
@@ -21,5 +23,12 @@ export function openInTab(
   tab: OpenTab
 ): void {
   tabs.open({ ...tab, id: documentTabId(tab.url) });
-  history.push(tab.url);
+  history.push(
+    tab.sidebarContext
+      ? {
+          pathname: tab.url,
+          state: { sidebarContext: tab.sidebarContext },
+        }
+      : tab.url
+  );
 }

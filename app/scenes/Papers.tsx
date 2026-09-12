@@ -27,6 +27,13 @@ import {
 } from "./customData";
 import {
   filterAndSortPapers,
+  planPaperMetadataRefresh,
+  parsePaperData,
+  parsePaperMeta,
+  selectChangedPaperDocuments,
+  selectPaperViewRefreshIds,
+  summarizePaperTags,
+  sumViewCounts,
   type Meta,
   type Paper,
   type PaperScope,
@@ -34,12 +41,23 @@ import {
   type Rating,
   type ReadState,
 } from "./PapersHelpers";
+import {
+  fulfilledRefreshEntries,
+  settleWithConcurrency,
+} from "./RefreshHelpers";
 
 const PAPER = "📖";
 const readKey = "outline.desktop.papers.read.v1";
 const likesKey = "outline.desktop.papers.likes.v1";
-const paperCacheKey = "outline.desktop.papers.snapshot.v1";
-const PAPER_CACHE_TTL = 30 * 60 * 1000;
+const paperCacheKey = "outline.desktop.papers.snapshot.v3";
+const paperViewsCacheKey = "outline.desktop.papers.views.v1";
+const PAPER_CACHE_TTL = 5 * 60 * 1000;
+const PAPER_SOURCE_DISCOVERY_TTL = 24 * 60 * 60 * 1000;
+const PAPER_VIEW_CACHE_TTL = 6 * 60 * 60 * 1000;
+const PAPER_VIEW_REFRESH_LIMIT = 24;
+const PAPER_VIEW_CONCURRENCY = 4;
+const PAPER_SOURCE_CONCURRENCY = 3;
+const PAPER_METADATA_CONCURRENCY = 2;
 const refreshingPaperScopes = new Set<string>();
 const interactionPath = "论文库/interactions.json";
 type InteractionData = {
@@ -54,10 +72,28 @@ type PaperSnapshot = {
   papers: Paper[];
   metas: Record<string, Meta>;
   complete?: boolean;
+  metadataSyncedAt?: number;
+  sourceCollectionIds?: string[];
+  sourcesDiscoveredAt?: number;
+};
+type PaperViewsCache = {
+  counts: Record<string, number>;
+  checkedAt: Record<string, number>;
 };
 type WebdavResult = {
   ok?: boolean;
   data?: { found?: boolean; content?: string };
+};
+
+const emptyMeta: Meta = {
+  tags: [],
+  venue: null,
+  link: null,
+  code: null,
+  enTitle: null,
+  authors: null,
+  org: null,
+  parsed: false,
 };
 
 function asWebdavResult(value: unknown): WebdavResult {
@@ -83,6 +119,30 @@ function writePaperSnapshot(scope: string, snapshot: PaperSnapshot): void {
   } catch {
     // A storage quota miss only disables the optimization; it must not block
     // the library itself.
+  }
+}
+
+function readPaperViews(scope: string): PaperViewsCache {
+  try {
+    const parsed = JSON.parse(
+      localStorage.getItem(`${paperViewsCacheKey}.${scope}`) ?? "null"
+    ) as PaperViewsCache | null;
+    return parsed?.counts && parsed?.checkedAt
+      ? parsed
+      : { counts: {}, checkedAt: {} };
+  } catch {
+    return { counts: {}, checkedAt: {} };
+  }
+}
+
+function writePaperViews(scope: string, cache: PaperViewsCache): void {
+  try {
+    localStorage.setItem(
+      `${paperViewsCacheKey}.${scope}`,
+      JSON.stringify(cache)
+    );
+  } catch {
+    // Reading the library must still work when browser storage is full.
   }
 }
 
@@ -112,7 +172,7 @@ function collectRecommendation(
     if (m) {
       return collectRecommendation(node.children ?? [], year, Number(m[1]));
     }
-    return [{ ...node, year, month }];
+    return [{ ...node, children: undefined, year, month }];
   });
 }
 
@@ -125,52 +185,12 @@ function collectFeatured(
     const title = node.title.trim();
     if (title.startsWith(PAPER)) {
       return [
-        { ...node, title, topic, source } as Paper,
+        { ...node, children: undefined, title, topic, source } as Paper,
         ...collectFeatured(node.children ?? [], topic, source),
       ];
     }
     return collectFeatured(node.children ?? [], topic ?? title, source);
   });
-}
-
-function parseMeta(text: string | undefined): Meta {
-  const fields = new Map<string, string>();
-  for (const line of (text ?? "").split("\n").slice(0, 45)) {
-    const match = /^\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$/.exec(line.trim());
-    if (match && !/^[-\s:]+$/.test(match[1])) {
-      fields.set(match[1].trim(), match[2].trim());
-    }
-  }
-  const pick = (...keys: string[]) =>
-    [...fields].find(([name]) => keys.some((key) => name.includes(key)))?.[1] ??
-    null;
-  const extractUrl = (value: string | null) =>
-    value
-      ? (/\((https?:\/\/[^)]+)\)/.exec(value)?.[1] ??
-        (value.startsWith("http") ? value : null))
-      : null;
-  const title = pick(
-    "英文标题",
-    "原文标题",
-    "原标题",
-    "英文题目",
-    "论文标题",
-    "Title"
-  );
-  return {
-    tags: (pick("领域", "方向", "标签") ?? "")
-      .split(/[,，、;；|]/)
-      .map((tag) => tag.replace(/[*_`]/g, "").trim())
-      .filter(Boolean),
-    venue: pick("发表时间", "发表", "venue"),
-    link: extractUrl(pick("论文链接", "链接")),
-    code: extractUrl(pick("代码仓库", "代码", "源码", "GitHub")),
-    enTitle:
-      title
-        ?.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-        .replace(/[*_`]/g, "")
-        .trim() || null,
-  };
 }
 
 function readMap(key: string): Record<string, string> {
@@ -186,18 +206,23 @@ export default function Papers() {
   const user = useCurrentUser({ rejectOnEmpty: false });
   const history = useHistory();
   const paperScope = auth.currentTeamId ?? window.location.host;
+  const initialSnapshot = React.useMemo(
+    () => readPaperSnapshot(paperScope),
+    [paperScope]
+  );
   const [papers, setPapers] = React.useState<Paper[]>(
-    () => readPaperSnapshot(paperScope)?.papers ?? []
+    () => initialSnapshot?.papers ?? []
   );
   const [metas, setMetas] = React.useState<Record<string, Meta>>(
-    () => readPaperSnapshot(paperScope)?.metas ?? {}
+    () => initialSnapshot?.metas ?? {}
   );
-  const [loading, setLoading] = React.useState(
-    () => !readPaperSnapshot(paperScope)
-  );
+  const [loading, setLoading] = React.useState(() => !initialSnapshot);
+  const [metadataLoading, setMetadataLoading] = React.useState(false);
   const [query, setQuery] = React.useState("");
   const [refreshKey, setRefreshKey] = React.useState(0);
   const [scope, setScope] = React.useState<PaperScope>("all");
+  const [year, setYear] = React.useState<number | null>(null);
+  const [month, setMonth] = React.useState<number | null>(null);
   const [readFilter, setReadFilter] = React.useState<ReadState | "">("");
   const [sort, setSort] = React.useState<PaperSort>("updated");
   const [tag, setTag] = React.useState<string | null>(null);
@@ -205,9 +230,12 @@ export default function Papers() {
   const scopedLikesKey = `${likesKey}.${paperScope}`;
   const [read, setRead] = React.useState(readMap(scopedReadKey));
   const [likes, setLikes] = React.useState(readMap(scopedLikesKey));
+  const [likeCounts, setLikeCounts] = React.useState<Record<string, number>>(
+    {}
+  );
   const [ratings, setRatings] = React.useState<Record<string, Rating>>({});
   const [viewCounts, setViewCounts] = React.useState<Record<string, number>>(
-    {}
+    () => readPaperViews(paperScope).counts
   );
   const [viewed, setViewed] = React.useState<Record<string, string>>(() =>
     readMap(`${readKey}.history.${auth.currentTeamId ?? window.location.host}`)
@@ -253,6 +281,14 @@ export default function Papers() {
             })
           );
           setLikes(next);
+          setLikeCounts(
+            Object.fromEntries(
+              Object.entries(remote.papers ?? {}).map(([id, entries]) => [
+                id,
+                Object.values(entries).filter((entry) => entry.like).length,
+              ])
+            )
+          );
           setRatings(nextRatings);
           localStorage.setItem(scopedLikesKey, JSON.stringify(next));
         } catch {
@@ -266,35 +302,52 @@ export default function Papers() {
   }, [scopedLikesKey, user?.id]);
 
   React.useEffect(() => {
+    if (!papers.length) {
+      return;
+    }
     let cancelled = false;
-    void Promise.allSettled(
-      papers.slice(0, 200).map(async (paper) => {
-        const response = await client.post<{
-          data: { views?: { count?: number }[] };
-        }>("/views.list", { documentId: paper.id });
-        return [
-          paper.id,
-          (response.data?.views ?? []).reduce(
-            (total, view) => total + (view.count ?? 1),
-            0
-          ),
-        ] as const;
-      })
-    ).then((results) => {
-      if (!cancelled) {
-        setViewCounts(
-          Object.fromEntries(
-            results.flatMap((result) =>
-              result.status === "fulfilled" ? [result.value] : []
-            )
-          )
+    const cache = readPaperViews(paperScope);
+    setViewCounts(cache.counts);
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const ids = selectPaperViewRefreshIds(
+          papers,
+          cache.checkedAt,
+          Date.now(),
+          PAPER_VIEW_CACHE_TTL,
+          PAPER_VIEW_REFRESH_LIMIT
         );
-      }
-    });
+        for (
+          let offset = 0;
+          offset < ids.length;
+          offset += PAPER_VIEW_CONCURRENCY
+        ) {
+          const batchIds = ids.slice(offset, offset + PAPER_VIEW_CONCURRENCY);
+          const results = await Promise.allSettled(
+            batchIds.map(async (id) => {
+              const response = await client.post<{
+                data: { count?: number }[];
+              }>("/views.list", { documentId: id });
+              return [id, sumViewCounts(response.data ?? [])] as const;
+            })
+          );
+          const checkedAt = Date.now();
+          for (const [id, count] of fulfilledRefreshEntries(results)) {
+            cache.counts[id] = count;
+            cache.checkedAt[id] = checkedAt;
+          }
+          writePaperViews(paperScope, cache);
+          if (!cancelled) {
+            setViewCounts({ ...cache.counts });
+          }
+        }
+      })();
+    }, 2500);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [papers]);
+  }, [paperScope, papers]);
 
   React.useEffect(() => {
     const cached = readPaperSnapshot(paperScope);
@@ -302,7 +355,11 @@ export default function Papers() {
       setPapers(cached.papers);
       setMetas(cached.metas);
       setLoading(false);
-      if (cached.complete && Date.now() - cached.savedAt < PAPER_CACHE_TTL) {
+      if (
+        refreshKey === 0 &&
+        cached.complete &&
+        Date.now() - cached.savedAt < PAPER_CACHE_TTL
+      ) {
         return;
       }
     } else {
@@ -314,25 +371,54 @@ export default function Papers() {
       return;
     }
     refreshingPaperScopes.add(paperScope);
+    setMetadataLoading(true);
     let cancelled = false;
     void (async () => {
       try {
+        const syncStartedAt = Date.now();
         const collections = await listCollections();
-        const trees = await Promise.all(
-          collections.map(async (collection) => ({
+        const knownSourceIds = new Set(cached?.sourceCollectionIds ?? []);
+        const discoverSources =
+          knownSourceIds.size === 0 ||
+          !cached?.sourcesDiscoveredAt ||
+          syncStartedAt - cached.sourcesDiscoveredAt >=
+            PAPER_SOURCE_DISCOVERY_TTL;
+        const sourceCollections = discoverSources
+          ? collections
+          : collections.filter(
+              (collection) =>
+                knownSourceIds.has(collection.id) ||
+                ["组内工作", "精选专题"].includes(collection.name.trim())
+            );
+        const treeResults = await settleWithConcurrency(
+          sourceCollections,
+          PAPER_SOURCE_CONCURRENCY,
+          async (collection) => ({
             collection,
             tree: await collectionDocuments(collection.id),
-          }))
+          })
+        );
+        const failedTree = treeResults.find(
+          (result) => result.status === "rejected"
+        );
+        if (failedTree?.status === "rejected") {
+          throw failedTree.reason;
+        }
+        const trees = treeResults.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : []
         );
         const found: Paper[] = [];
+        const scanCollectionIds = new Set<string>();
         for (const { collection, tree } of trees) {
           const root = flatten(tree).find(
             (item) => item.title.trim() === "推荐阅读"
           );
           if (root) {
+            scanCollectionIds.add(collection.id);
             found.push(...collectRecommendation(root.children ?? []));
           }
           if (collection.name.trim() === "组内工作") {
+            scanCollectionIds.add(collection.id);
             found.push(
               ...flatten(tree)
                 .filter((item) => item.title.trim().startsWith(PAPER))
@@ -340,6 +426,7 @@ export default function Papers() {
                   (item) =>
                     ({
                       ...item,
+                      children: undefined,
                       topic: "组内工作",
                       source: "internal",
                     }) as Paper
@@ -347,21 +434,21 @@ export default function Papers() {
             );
           }
           if (collection.name.trim() === "精选专题") {
+            scanCollectionIds.add(collection.id);
             found.push(...collectFeatured(tree));
           }
         }
-        const search = await client.post<{ data: CustomDocument[] }>(
-          "/documents.list",
-          { query: "📖", sort: "updatedAt", direction: "DESC", limit: 100 }
-        );
-        found.push(
-          ...((search.data ?? []).filter((item) =>
-            item.title.trim().startsWith(PAPER)
-          ) as Paper[])
-        );
-        const unique = [
+        const indexed = [
           ...new Map(found.map((item) => [item.id, item])).values(),
         ];
+        const cachedPapers = new Map(
+          (cached?.papers ?? []).map((paper) => [paper.id, paper])
+        );
+        const unique = indexed.map((paper) => ({
+          ...cachedPapers.get(paper.id),
+          ...paper,
+          children: undefined,
+        }));
         // The tree contains enough information to paint the library. Show it
         // immediately, then hydrate expensive per-document metadata in small
         // batches so a cold cache never blocks the first screen.
@@ -373,41 +460,105 @@ export default function Papers() {
         // the critical cache boundary: closing the page while metadata is
         // still hydrating must not force another full collection scan.
         writePaperSnapshot(paperScope, {
-          savedAt: Date.now(),
+          savedAt: syncStartedAt,
           papers: unique,
           metas: cached?.metas ?? {},
-          complete: false,
+          complete: cached?.complete,
+          metadataSyncedAt: cached?.metadataSyncedAt,
+          sourceCollectionIds: [...scanCollectionIds],
+          sourcesDiscoveredAt: discoverSources
+            ? syncStartedAt
+            : cached?.sourcesDiscoveredAt,
         });
-        const nextMetas: Record<string, Meta> = {};
-        const concurrency = 12;
-        for (let i = 0; i < unique.length; i += concurrency) {
-          const batch = await Promise.all(
-            unique.slice(i, i + concurrency).map(async (item) => {
-              try {
-                const response = await client.post<{
-                  data: CustomDocument & { text?: string };
-                }>("/documents.info", { id: item.id });
-                return [item.id, parseMeta(response.data?.text)] as const;
-              } catch {
-                return [item.id, parseMeta(undefined)] as const;
+        const paperIds = new Set(unique.map((item) => item.id));
+        const paperById = new Map(unique.map((paper) => [paper.id, paper]));
+        const nextMetas = Object.fromEntries(
+          unique.flatMap((paper) =>
+            cached?.metas[paper.id] ? [[paper.id, cached.metas[paper.id]]] : []
+          )
+        ) as Record<string, Meta>;
+        const refreshPlan = planPaperMetadataRefresh(cached);
+        const scanCollection = async (collectionId: string) => {
+          const pageSize = refreshPlan.mode === "changed" ? 20 : 100;
+          for (let offset = 0; offset < 5000; offset += pageSize) {
+            const response = await client.post<{
+              data: CustomDocument[];
+              pagination?: { total?: number };
+            }>("/documents.list", {
+              collectionId,
+              sort: "updatedAt",
+              direction: "DESC",
+              limit: pageSize,
+              offset,
+            });
+            const page = response.data ?? [];
+            const selected =
+              refreshPlan.mode === "changed"
+                ? selectChangedPaperDocuments(page, refreshPlan.since)
+                : { changed: page, reachedCheckpoint: false };
+            for (const document of selected.changed) {
+              if (paperIds.has(document.id)) {
+                Object.assign(paperById.get(document.id)!, document, {
+                  children: undefined,
+                });
+                nextMetas[document.id] =
+                  typeof document.text === "string"
+                    ? parsePaperMeta(document.text)
+                    : parsePaperData(document.data);
               }
-            })
-          );
-          for (const [id, meta] of batch) {
-            nextMetas[id] = meta;
+            }
+            if (
+              selected.reachedCheckpoint ||
+              page.length < pageSize ||
+              (response.pagination?.total !== undefined &&
+                offset + page.length >= response.pagination.total)
+            ) {
+              break;
+            }
           }
-          if (!cancelled && i % (concurrency * 4) === 0) {
-            setMetas({ ...nextMetas });
+          const progressMetas = { ...nextMetas };
+          if (!cancelled) {
+            setMetas(progressMetas);
           }
+          writePaperSnapshot(paperScope, {
+            savedAt: syncStartedAt,
+            papers: unique,
+            metas: progressMetas,
+            complete: refreshPlan.mode === "changed" ? cached?.complete : false,
+            metadataSyncedAt: cached?.metadataSyncedAt,
+            sourceCollectionIds: [...scanCollectionIds],
+            sourcesDiscoveredAt: discoverSources
+              ? syncStartedAt
+              : cached?.sourcesDiscoveredAt,
+          });
+        };
+        const scanResults = await settleWithConcurrency(
+          [...scanCollectionIds],
+          PAPER_METADATA_CONCURRENCY,
+          scanCollection
+        );
+        for (const paper of unique) {
+          nextMetas[paper.id] ??= emptyMeta;
         }
+        const complete = scanResults.every(
+          (result) => result.status === "fulfilled"
+        );
         writePaperSnapshot(paperScope, {
           savedAt: Date.now(),
           papers: unique,
           metas: nextMetas,
-          complete: true,
+          complete:
+            refreshPlan.mode === "changed"
+              ? Boolean(cached?.complete)
+              : complete,
+          metadataSyncedAt: complete ? syncStartedAt : cached?.metadataSyncedAt,
+          sourceCollectionIds: [...scanCollectionIds],
+          sourcesDiscoveredAt: discoverSources
+            ? syncStartedAt
+            : cached?.sourcesDiscoveredAt,
         });
         if (!cancelled) {
-          setPapers(unique);
+          setPapers([...unique]);
           setMetas(nextMetas);
         }
       } catch (error) {
@@ -416,6 +567,7 @@ export default function Papers() {
         refreshingPaperScopes.delete(paperScope);
         if (!cancelled) {
           setLoading(false);
+          setMetadataLoading(false);
         }
       }
     })();
@@ -424,13 +576,40 @@ export default function Papers() {
     };
   }, [paperScope, refreshKey]);
 
+  const tagCounts = React.useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const meta of Object.values(metas)) {
+      for (const item of meta.tags) {
+        counts.set(item, (counts.get(item) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [metas]);
   const allTags = React.useMemo(
     () =>
-      [...new Set(Object.values(metas).flatMap((meta) => meta.tags))].slice(
-        0,
-        24
-      ),
-    [metas]
+      [...tagCounts]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh"))
+        .slice(0, 24)
+        .map(([item]) => item),
+    [tagCounts]
+  );
+  const years = React.useMemo(
+    () =>
+      [
+        ...new Set(papers.flatMap((paper) => (paper.year ? [paper.year] : []))),
+      ].sort((a, b) => b - a),
+    [papers]
+  );
+  const months = React.useMemo(
+    () =>
+      [
+        ...new Set(
+          papers.flatMap((paper) =>
+            paper.month && (!year || paper.year === year) ? [paper.month] : []
+          )
+        ),
+      ].sort((a, b) => b - a),
+    [papers, year]
   );
   const visible = React.useMemo(
     () =>
@@ -442,7 +621,7 @@ export default function Papers() {
         viewed,
         viewCounts,
         ratings,
-        options: { query, tag, readFilter, scope, sort },
+        options: { query, tag, year, month, readFilter, scope, sort },
       }),
     [
       papers,
@@ -454,6 +633,8 @@ export default function Papers() {
       ratings,
       query,
       tag,
+      year,
+      month,
       readFilter,
       scope,
       sort,
@@ -485,6 +666,10 @@ export default function Papers() {
       delete next[id];
     }
     setLikes(next);
+    setLikeCounts((current) => ({
+      ...current,
+      [id]: Math.max(0, (current[id] ?? 0) + (liked ? 1 : -1)),
+    }));
     localStorage.setItem(scopedLikesKey, JSON.stringify(next));
     void (async () => {
       try {
@@ -599,25 +784,31 @@ export default function Papers() {
       title="论文库"
       textTitle="论文库"
       wide
-      actions={
-        <ButtonSmall
-          neutral
-          onClick={() => setRefreshKey((current) => current + 1)}
-          aria-label="刷新论文库"
-        >
-          刷新
-        </ButtonSmall>
-      }
+      hideHeaderOnDesktop
     >
-      <FeatureHeader>
-        <FeatureHint>
-          汇总推荐阅读、精选专题与组内工作，按领域、状态和互动记录快速定位。
-        </FeatureHint>
-        <FeatureStats>
-          {papers.length ? `${papers.length} 篇论文` : "准备索引中"}
-        </FeatureStats>
-      </FeatureHeader>
-      <Toolbar>
+      <Board>
+        <FeatureHeader>
+          <HeaderCopy>
+            <PageHeading>论文库</PageHeading>
+            <FeatureHint>
+              推荐阅读目录的检索视图，按时间、领域、状态和关键词快速定位。
+            </FeatureHint>
+          </HeaderCopy>
+          <HeaderSide>
+            <FeatureStats>
+              {papers.length ? `共 ${papers.length} 篇` : "准备索引中"}
+              {metadataLoading && papers.length > 0 ? " · 更新中" : ""}
+            </FeatureStats>
+            <ButtonSmall
+              neutral
+              onClick={() => setRefreshKey((current) => current + 1)}
+              aria-label="刷新论文库"
+              disabled={metadataLoading}
+            >
+              {metadataLoading ? "刷新中…" : "刷新"}
+            </ButtonSmall>
+          </HeaderSide>
+        </FeatureHeader>
         <ScopeBar role="tablist" aria-label="论文范围">
           {(["all", "liked", "history"] as PaperScope[]).map((item) => (
             <ScopeButton
@@ -629,236 +820,313 @@ export default function Papers() {
               onClick={() => setScope(item)}
             >
               {item === "all"
-                ? "全部"
+                ? `全部 ${papers.length}`
                 : item === "liked"
-                  ? `我赞过 · ${Object.keys(likes).length}`
-                  : `最近浏览 · ${Object.keys(viewed).length}`}
+                  ? `我赞过 ${Object.keys(likes).length}`
+                  : `最近浏览 ${Object.keys(viewed).length}`}
             </ScopeButton>
           ))}
         </ScopeBar>
-        <SearchBox>
-          <InputSearch
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索标题、作者、领域或会议…"
-          />
-        </SearchBox>
-        <FilterLabel>
-          阅读状态
-          <select
-            value={readFilter}
-            onChange={(event) =>
-              setReadFilter(event.target.value as ReadState | "")
-            }
-          >
-            <option value="">全部</option>
-            <option value="unread">未读</option>
-            <option value="reading">在读</option>
-            <option value="read">已读</option>
-          </select>
-        </FilterLabel>
-        <FilterLabel>
-          排序
-          <select
-            value={sort}
-            onChange={(event) => setSort(event.target.value as PaperSort)}
-          >
-            <option value="updated">更新时间 新→旧</option>
-            <option value="views">阅读量 多→少</option>
-            <option value="likes">点赞优先</option>
-            <option value="score">评分优先</option>
-            <option value="title">标题 A→Z</option>
-          </select>
-        </FilterLabel>
-      </Toolbar>
-      <FilterSummary aria-label="当前论文筛选">
-        {tag && (
-          <ActiveFilter>
-            标签：{tag}
-            <button
-              type="button"
-              onClick={() => setTag(null)}
-              aria-label="清除标签筛选"
+        <Toolbar>
+          <SearchBox>
+            <InputSearch
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索标题、作者、领域或会议…"
+            />
+          </SearchBox>
+          <FilterLabel>
+            <FilterName>年份</FilterName>
+            <select
+              aria-label="推荐年份"
+              value={year ?? ""}
+              onChange={(event) => {
+                setYear(event.target.value ? Number(event.target.value) : null);
+                setMonth(null);
+              }}
             >
-              ×
-            </button>
-          </ActiveFilter>
-        )}
-      </FilterSummary>
-      {allTags.length > 0 && (
-        <TagBar aria-label="热门领域标签">
-          <TagHeading>热门领域</TagHeading>
-          {allTags.map((item) => (
-            <Tag
-              type="button"
-              key={item}
-              $active={tag === item}
-              onClick={() => setTag(tag === item ? null : item)}
+              <option value="">全部年份</option>
+              {years.map((item) => (
+                <option key={item} value={item}>
+                  {item} 年
+                </option>
+              ))}
+            </select>
+          </FilterLabel>
+          <FilterLabel>
+            <FilterName>月份</FilterName>
+            <select
+              aria-label="推荐月份"
+              value={month ?? ""}
+              onChange={(event) =>
+                setMonth(event.target.value ? Number(event.target.value) : null)
+              }
             >
-              {item}
-            </Tag>
-          ))}
-        </TagBar>
-      )}
-      {(query.trim() || tag || readFilter || scope !== "all") && (
-        <Summary>
-          <strong>{visible.length}</strong> 篇匹配 · 已读{" "}
-          {Object.values(read).filter((value) => value === "read").length} 篇
-          {scope === "history" && <span> · 按最近浏览排序</span>}
-        </Summary>
-      )}
-      {loading ? (
-        <Empty>正在加载论文库…</Empty>
-      ) : visible.length === 0 ? (
-        <Empty>没有匹配的论文。可以清除筛选条件后再试。</Empty>
-      ) : (
-        <List>
-          {visible.map((paper) => {
-            const meta = metas[paper.id] ?? { tags: [] };
-            const state = read[paper.id] ?? "unread";
-            const source =
-              paper.source === "internal"
-                ? "组内工作"
-                : paper.source === "featured"
-                  ? (paper.topic ?? "精选专题")
-                  : paper.year
-                    ? `${paper.year} · ${paper.month ?? "?"}月`
-                    : null;
-            return (
-              <Row
-                key={paper.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => open(paper)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    open(paper);
-                  }
-                }}
+              <option value="">全部月份</option>
+              {months.map((item) => (
+                <option key={item} value={item}>
+                  {item} 月
+                </option>
+              ))}
+            </select>
+          </FilterLabel>
+          <FilterLabel>
+            <FilterName>状态</FilterName>
+            <select
+              aria-label="阅读状态"
+              value={readFilter}
+              onChange={(event) =>
+                setReadFilter(event.target.value as ReadState | "")
+              }
+            >
+              <option value="">全部状态</option>
+              <option value="unread">未读</option>
+              <option value="reading">在读</option>
+              <option value="read">已读</option>
+            </select>
+          </FilterLabel>
+          <FilterLabel>
+            <FilterName>排序</FilterName>
+            <select
+              aria-label="论文排序"
+              value={sort}
+              onChange={(event) => setSort(event.target.value as PaperSort)}
+            >
+              <option value="updated">更新时间 新→旧</option>
+              <option value="views">阅读量 多→少</option>
+              <option value="likes">点赞优先</option>
+              <option value="score">评分优先</option>
+              <option value="title">标题 A→Z</option>
+            </select>
+          </FilterLabel>
+        </Toolbar>
+        <FilterSummary aria-label="当前论文筛选">
+          {tag && (
+            <ActiveFilter>
+              标签：{tag}
+              <button
+                type="button"
+                onClick={() => setTag(null)}
+                aria-label="清除标签筛选"
               >
-                <PaperIcon aria-hidden>{paper.emoji ?? "📖"}</PaperIcon>
-                <Main>
-                  <Title>{paper.title.replace(/^📖\s*/, "")}</Title>
-                  <MetaLine>
-                    {source && <MetaPill>{source}</MetaPill>}
-                    {meta.venue && <span>{meta.venue}</span>}
-                    <span>
-                      <EyeIcon size={13} /> {viewCounts[paper.id] ?? 0}
-                    </span>
-                    {meta.tags?.slice(0, 4).map((item) => (
-                      <Tag
+                ×
+              </button>
+            </ActiveFilter>
+          )}
+        </FilterSummary>
+        {allTags.length > 0 && (
+          <TagBar aria-label="热门领域标签">
+            <TagHeading>热门领域</TagHeading>
+            {allTags.map((item) => (
+              <Tag
+                type="button"
+                key={item}
+                $active={tag === item}
+                onClick={() => setTag(tag === item ? null : item)}
+              >
+                {item} <TagCount>{tagCounts.get(item)}</TagCount>
+              </Tag>
+            ))}
+          </TagBar>
+        )}
+        {(query.trim() ||
+          tag ||
+          year ||
+          month ||
+          readFilter ||
+          scope !== "all") && (
+          <Summary>
+            <strong>{visible.length}</strong> 篇匹配 · 已读{" "}
+            {Object.values(read).filter((value) => value === "read").length} 篇
+            {scope === "history" && <span> · 按最近浏览排序</span>}
+          </Summary>
+        )}
+        {loading ? (
+          <Empty>正在加载论文库…</Empty>
+        ) : visible.length === 0 ? (
+          <Empty>没有匹配的论文。可以清除筛选条件后再试。</Empty>
+        ) : (
+          <List>
+            {visible.map((paper) => {
+              const meta = metas[paper.id] ?? emptyMeta;
+              const tagSummary = summarizePaperTags(meta.tags ?? [], 4);
+              const state = read[paper.id] ?? "unread";
+              const source =
+                paper.source === "internal"
+                  ? "组内工作"
+                  : paper.source === "featured"
+                    ? (paper.topic ?? "精选专题")
+                    : paper.year
+                      ? `${paper.year} · ${paper.month ?? "?"}月`
+                      : null;
+              return (
+                <Row
+                  key={paper.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => open(paper)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      open(paper);
+                    }
+                  }}
+                >
+                  <Main>
+                    <Title title={paper.title.replace(/^📖\s*/, "")}>
+                      {paper.title.replace(/^📖\s*/, "")}
+                    </Title>
+                    {meta.enTitle && (
+                      <EnglishTitle title={meta.enTitle}>
+                        {meta.enTitle}
+                      </EnglishTitle>
+                    )}
+                    {(meta.authors || meta.org) && (
+                      <AuthorLine>
+                        {meta.authors && <span>{meta.authors}</span>}
+                        {meta.authors && meta.org && <Separator>·</Separator>}
+                        {meta.org && <Organization>{meta.org}</Organization>}
+                      </AuthorLine>
+                    )}
+                    <MetaLine>
+                      {source && <MetaPill>{source}</MetaPill>}
+                      {meta.venue && <span>{meta.venue}</span>}
+                      {(viewCounts[paper.id] ?? 0) > 0 && (
+                        <span>
+                          <EyeIcon size={13} /> {viewCounts[paper.id]} 人读过
+                        </span>
+                      )}
+                      {tagSummary.visible.map((item) => (
+                        <Tag
+                          type="button"
+                          key={item}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setTag(item);
+                          }}
+                        >
+                          {item}
+                        </Tag>
+                      ))}
+                      {tagSummary.hiddenCount > 0 && (
+                        <OverflowTag title={meta.tags.join("、")}>
+                          +{tagSummary.hiddenCount}
+                        </OverflowTag>
+                      )}
+                    </MetaLine>
+                  </Main>
+                  <Actions>
+                    <Tooltip
+                      content={likes[paper.id] ? "取消点赞" : "点赞"}
+                      placement="bottom"
+                    >
+                      <IconButton
                         type="button"
-                        key={item}
                         onClick={(event) => {
                           event.stopPropagation();
-                          setTag(item);
+                          toggleLike(paper.id);
                         }}
+                        $active={!!likes[paper.id]}
+                        aria-label={likes[paper.id] ? "取消点赞" : "点赞"}
                       >
-                        {item}
-                      </Tag>
-                    ))}
-                  </MetaLine>
-                  {meta.enTitle && <EnglishTitle>{meta.enTitle}</EnglishTitle>}
-                </Main>
-                <Actions>
-                  <Tooltip
-                    content={likes[paper.id] ? "取消点赞" : "点赞"}
-                    placement="bottom"
-                  >
-                    <IconButton
+                        <ThumbsUpIcon size={15} />
+                        {(likeCounts[paper.id] ?? 0) > 0 && (
+                          <Count>{likeCounts[paper.id]}</Count>
+                        )}
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip
+                      content="点击循环评分，5 星后清除"
+                      placement="bottom"
+                    >
+                      <IconButton
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setScore(paper.id);
+                        }}
+                        $active={!!ratings[paper.id]?.mine}
+                        aria-label={`评分 ${ratings[paper.id]?.average?.toFixed(1) ?? "未评分"}`}
+                      >
+                        <StarredIcon size={15} />
+                        {ratings[paper.id]?.average ? (
+                          <Count>{ratings[paper.id].average.toFixed(1)}</Count>
+                        ) : null}
+                      </IconButton>
+                    </Tooltip>
+                    {meta.link && (
+                      <Tooltip content="打开论文原文" placement="bottom">
+                        <IconLink
+                          href={meta.link}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(event) => event.stopPropagation()}
+                          aria-label="打开论文原文"
+                        >
+                          <OpenIcon size={15} />
+                        </IconLink>
+                      </Tooltip>
+                    )}
+                    {meta.code && (
+                      <Tooltip content="打开代码仓库" placement="bottom">
+                        <IconLink
+                          href={meta.code}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(event) => event.stopPropagation()}
+                          aria-label="打开代码仓库"
+                        >
+                          <CodeIcon size={15} />
+                        </IconLink>
+                      </Tooltip>
+                    )}
+                    <ReadButton
                       type="button"
                       onClick={(event) => {
                         event.stopPropagation();
-                        toggleLike(paper.id);
+                        cycleRead(paper.id);
                       }}
-                      $active={!!likes[paper.id]}
-                      aria-label={likes[paper.id] ? "取消点赞" : "点赞"}
+                      $state={state}
+                      aria-label={`阅读状态：${state === "read" ? "已读" : state === "reading" ? "在读" : "未读"}`}
                     >
-                      <ThumbsUpIcon size={15} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip
-                    content="点击循环评分，5 星后清除"
-                    placement="bottom"
-                  >
-                    <IconButton
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setScore(paper.id);
-                      }}
-                      $active={!!ratings[paper.id]?.mine}
-                      aria-label={`评分 ${ratings[paper.id]?.average?.toFixed(1) ?? "未评分"}`}
-                    >
-                      <StarredIcon size={15} />
-                      {ratings[paper.id]?.average ? (
-                        <Count>{ratings[paper.id].average.toFixed(1)}</Count>
-                      ) : null}
-                    </IconButton>
-                  </Tooltip>
-                  {meta.link && (
-                    <Tooltip content="打开论文原文" placement="bottom">
-                      <IconLink
-                        href={meta.link}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={(event) => event.stopPropagation()}
-                        aria-label="打开论文原文"
-                      >
-                        <OpenIcon size={15} />
-                      </IconLink>
-                    </Tooltip>
-                  )}
-                  {meta.code && (
-                    <Tooltip content="打开代码仓库" placement="bottom">
-                      <IconLink
-                        href={meta.code}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={(event) => event.stopPropagation()}
-                        aria-label="打开代码仓库"
-                      >
-                        <CodeIcon size={15} />
-                      </IconLink>
-                    </Tooltip>
-                  )}
-                  <ReadButton
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      cycleRead(paper.id);
-                    }}
-                    $state={state}
-                    aria-label={`阅读状态：${state === "read" ? "已读" : state === "reading" ? "在读" : "未读"}`}
-                  >
-                    <ReadDot $state={state} />
-                    <ReadText>
-                      {state === "read"
-                        ? "已读"
-                        : state === "reading"
-                          ? "在读"
-                          : "未读"}
-                    </ReadText>
-                  </ReadButton>
-                </Actions>
-              </Row>
-            );
-          })}
-        </List>
-      )}
+                      <ReadDot $state={state} />
+                      <ReadText>
+                        {state === "read"
+                          ? "已读"
+                          : state === "reading"
+                            ? "在读"
+                            : "未读"}
+                      </ReadText>
+                    </ReadButton>
+                  </Actions>
+                </Row>
+              );
+            })}
+          </List>
+        )}
+      </Board>
     </Scene>
   );
 }
 
+const Board = styled.div`
+  width: min(100%, 1280px);
+  margin: 0 auto;
+  padding: 22px 28px 56px;
+
+  @media (max-width: 700px) {
+    padding: 12px 16px 40px;
+  }
+`;
 const Toolbar = styled.div`
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
-  margin: 0 0 10px;
-  padding: 8px;
-  border-radius: 8px;
-  background: ${(p) => p.theme.backgroundSecondary};
+  margin: 10px 0 12px;
+  padding: 10px;
+  border: 1px solid ${(p) => p.theme.divider};
+  border-radius: 10px;
+  background: ${(p) => p.theme.background};
   flex-wrap: wrap;
 
   @media (max-width: 700px) {
@@ -868,41 +1136,71 @@ const Toolbar = styled.div`
 `;
 const FeatureHeader = styled.div`
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin: 14px 0 16px;
+  gap: 24px;
+  margin: 8px 0 20px;
+
+  @media (max-width: 860px) {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+`;
+const HeaderCopy = styled.div`
+  min-width: 0;
+`;
+const PageHeading = styled.h1`
+  margin: 0 0 5px;
+  color: ${(props) => props.theme.text};
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
 `;
 const FeatureHint = styled.p`
   margin: 0;
-  max-width: 680px;
+  max-width: 720px;
   color: ${(props) => props.theme.textTertiary};
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.5;
+`;
+const HeaderSide = styled.div`
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-shrink: 0;
+
+  @media (max-width: 860px) {
+    width: 100%;
+    justify-content: space-between;
+  }
 `;
 const FeatureStats = styled.div`
   flex-shrink: 0;
-  padding: 4px 8px;
-  border-radius: 5px;
+  padding: 5px 9px;
+  border-radius: 7px;
   color: ${(props) => props.theme.textTertiary};
   background: ${(props) => props.theme.backgroundSecondary};
   font-size: 13px;
 `;
 const ScopeBar = styled.div`
   display: flex;
-  gap: 2px;
+  gap: 6px;
   flex-shrink: 0;
-  padding: 0;
+  padding-bottom: 2px;
 `;
 const ScopeButton = styled.button<{ $active: boolean }>`
-  border: 0;
-  border-radius: 6px;
-  padding: 7px 9px;
-  color: ${(p) => (p.$active ? p.theme.text : p.theme.textTertiary)};
-  background: ${(p) => (p.$active ? p.theme.background : "transparent")};
+  border: 1px solid ${(p) => (p.$active ? p.theme.accent : p.theme.divider)};
+  border-radius: 999px;
+  padding: 5px 11px;
+  color: ${(p) => (p.$active ? p.theme.accent : p.theme.textSecondary)};
+  background: ${(p) =>
+    p.$active ? p.theme.backgroundSecondary : p.theme.background};
   font-size: 13px;
   cursor: pointer;
   &:hover {
     color: ${(p) => p.theme.text};
+    background: ${(p) => p.theme.backgroundSecondary};
   }
   &:focus-visible {
     outline: 2px solid ${(p) => p.theme.inputBorderFocused};
@@ -916,20 +1214,27 @@ const SearchBox = styled.div`
 const FilterLabel = styled.label`
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   flex-shrink: 0;
   color: ${(p) => p.theme.textTertiary};
   font-size: 12px;
   select {
-    height: 30px;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    padding: 0 8px;
+    height: 34px;
+    border: 1px solid ${(p) => p.theme.divider};
+    border-radius: 7px;
+    padding: 0 9px;
     color: ${(p) => p.theme.text};
-    background: ${(p) => p.theme.background};
+    background: ${(p) => p.theme.backgroundSecondary};
     font: inherit;
     cursor: pointer;
   }
+`;
+const FilterName = styled.span`
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
 `;
 const FilterSummary = styled.div`
   min-height: 0;
@@ -940,8 +1245,8 @@ const TagBar = styled.div`
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
-  margin-bottom: 8px;
-  padding: 0 2px 8px;
+  margin-bottom: 12px;
+  padding: 0 0 12px;
   border-bottom: 1px solid ${(p) => p.theme.divider};
 `;
 const TagHeading = styled.span`
@@ -950,12 +1255,12 @@ const TagHeading = styled.span`
   margin-right: 2px;
 `;
 const Tag = styled.button<{ $active?: boolean }>`
-  border: 0;
-  border-radius: 5px;
-  padding: 4px 7px;
-  color: ${(p) => (p.$active ? p.theme.accent : p.theme.textTertiary)};
+  border: 1px solid ${(p) => (p.$active ? p.theme.accent : p.theme.divider)};
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: ${(p) => (p.$active ? p.theme.accent : p.theme.textSecondary)};
   background: ${(p) =>
-    p.$active ? p.theme.backgroundSecondary : "transparent"};
+    p.$active ? p.theme.backgroundSecondary : p.theme.background};
   cursor: pointer;
   font-size: 12px;
   &:hover {
@@ -966,6 +1271,12 @@ const Tag = styled.button<{ $active?: boolean }>`
     outline: 2px solid ${(p) => p.theme.inputBorderFocused};
     outline-offset: 1px;
   }
+`;
+const TagCount = styled.span`
+  margin-left: 2px;
+  color: ${(p) => p.theme.textTertiary};
+  font-size: 10px;
+  opacity: 0.75;
 `;
 const Summary = styled.div`
   color: ${(p) => p.theme.textTertiary};
@@ -984,11 +1295,14 @@ const List = styled.div`
 const Row = styled.div`
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 13px 10px;
+  gap: 18px;
+  padding: 16px 10px;
   border-bottom: 1px solid ${(p) => p.theme.divider};
   border-radius: 5px;
   cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
   &:hover {
     background: ${(p) => p.theme.backgroundSecondary};
   }
@@ -997,28 +1311,19 @@ const Row = styled.div`
     outline-offset: -2px;
   }
 `;
-const PaperIcon = styled.span`
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-  border-radius: 6px;
-  background: ${(p) => p.theme.backgroundSecondary};
-  font-size: 16px;
-`;
 const Main = styled.div`
   min-width: 0;
   flex: 1;
 `;
 const Title = styled.div`
-  color: ${(p) => p.theme.text};
-  font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
+  display: -webkit-box;
   overflow: hidden;
-  text-overflow: ellipsis;
+  color: ${(p) => p.theme.text};
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 `;
 const MetaLine = styled.div`
   display: flex;
@@ -1027,7 +1332,7 @@ const MetaLine = styled.div`
   flex-wrap: wrap;
   color: ${(p) => p.theme.textTertiary};
   font-size: 12px;
-  margin-top: 4px;
+  margin-top: 7px;
   svg {
     vertical-align: -2px;
   }
@@ -1040,18 +1345,49 @@ const MetaPill = styled.span`
 `;
 const EnglishTitle = styled.div`
   overflow: hidden;
-  margin-top: 5px;
-  color: ${(p) => p.theme.textTertiary};
-  font-size: 12px;
-  font-style: italic;
+  margin-top: 4px;
+  color: ${(p) => p.theme.textSecondary};
+  font-size: 13px;
+  line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
+`;
+const AuthorLine = styled.div`
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+  margin-top: 6px;
+  overflow: hidden;
+  color: ${(p) => p.theme.textTertiary};
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  > span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+`;
+const Organization = styled.span`
+  overflow: hidden;
+  color: ${(p) => p.theme.textTertiary};
+  text-overflow: ellipsis;
+`;
+const Separator = styled.span`
+  flex-shrink: 0;
 `;
 const Actions = styled.div`
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
   flex-shrink: 0;
+  align-self: center;
+
+  ${Row}:not(:hover) & button:not([aria-pressed="true"]),
+  ${Row}:not(:hover) & a {
+    opacity: 0.72;
+  }
 `;
 const IconButton = styled.button<{ $active: boolean }>`
   display: inline-flex;
@@ -1147,6 +1483,17 @@ const ActiveFilter = styled.span`
     font-size: 15px;
     line-height: 1;
   }
+`;
+const OverflowTag = styled.span`
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid ${(p) => p.theme.divider};
+  border-radius: 999px;
+  color: ${(p) => p.theme.textTertiary};
+  background: ${(p) => p.theme.background};
+  font-size: 11px;
 `;
 const ReadText = styled.span`
   @media (max-width: 760px) {

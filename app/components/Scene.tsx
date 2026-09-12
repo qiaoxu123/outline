@@ -19,6 +19,8 @@ type Props = {
   centered?: boolean;
   /** Whether to use the full width of the screen (default: false) */
   wide?: boolean;
+  /** Whether to omit the sticky header on desktop while retaining the mobile menu */
+  hideHeaderOnDesktop?: boolean;
   /** The content of the scene */
   children?: React.ReactNode;
 };
@@ -32,6 +34,7 @@ const Scene: React.FC<Props> = ({
   children,
   centered,
   wide,
+  hideHeaderOnDesktop,
 }: Props) => (
   <FillWidth>
     <PageTitle title={textTitle ?? (typeof title === "string" ? title : "")} />
@@ -48,6 +51,7 @@ const Scene: React.FC<Props> = ({
       }
       actions={actions}
       left={left}
+      hiddenOnDesktop={hideHeaderOnDesktop}
     />
     {centered !== false ? (
       <CenteredContent maxWidth={wide ? "100vw" : undefined} withStickyHeader>

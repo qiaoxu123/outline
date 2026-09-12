@@ -16,13 +16,14 @@ import useStores from "~/hooks/useStores";
 import { s } from "@shared/styles";
 import { preventDefault } from "~/utils/events";
 import { documentTabId, openInTab } from "~/utils/tabNavigation";
+import type { SidebarContextType } from "~/components/Sidebar/components/SidebarContext";
 
 const isDocumentPath = (path: string) =>
   path.startsWith("/doc/") && !path.includes("/history");
 
 function TabBar() {
   const { tabs, documents } = useStores();
-  const location = useLocation();
+  const location = useLocation<{ sidebarContext?: SidebarContextType }>();
   const history = useHistory();
   const current = isDocumentPath(location.pathname)
     ? documentTabId(location.pathname)
@@ -41,15 +42,23 @@ function TabBar() {
       url: location.pathname,
       title: document?.title ?? "Untitled",
       emoji: document?.icon,
+      sidebarContext: location.state?.sidebarContext,
     });
     if (document) {
       tabs.update(current, {
         title: document.title,
         emoji: document.icon,
         url: location.pathname,
+        sidebarContext: location.state?.sidebarContext,
       });
     }
-  }, [current, currentDocument, location.pathname, tabs]);
+  }, [
+    current,
+    currentDocument,
+    location.pathname,
+    location.state?.sidebarContext,
+    tabs,
+  ]);
 
   if (!tabs.tabs.length) {
     return null;
@@ -63,15 +72,23 @@ function TabBar() {
   const closeTab = (id: string) => {
     const next = tabs.close(id);
     if (id === current) {
-      history.push(
-        next ? (tabs.tabs.find((tab) => tab.id === next)?.url ?? "/") : "/"
-      );
+      const nextTab = next ? tabs.tabs.find((tab) => tab.id === next) : null;
+      if (nextTab) {
+        openInTab(history, tabs, nextTab);
+      } else {
+        history.push("/");
+      }
     }
   };
 
   const ensureCurrent = () => {
     if (current && !tabs.tabs.some((tab) => tab.id === current)) {
-      history.push(tabs.tabs[0]?.url ?? "/");
+      const firstTab = tabs.tabs[0];
+      if (firstTab) {
+        openInTab(history, tabs, firstTab);
+      } else {
+        history.push("/");
+      }
     }
   };
 

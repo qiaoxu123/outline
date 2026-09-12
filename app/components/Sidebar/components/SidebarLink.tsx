@@ -57,6 +57,8 @@ type Props = Omit<NavLinkProps, "to"> & {
   isDraft?: boolean;
   /** Nesting depth level for indentation (0-based) */
   depth?: number;
+  /** Base inline inset for icon rows before nesting depth is applied */
+  iconIndentBase?: number;
   /** Whether to truncate the label text (default: true, causes overflow: hidden) */
   ellipsis?: boolean;
   /** Whether to automatically scroll this link into view if needed */
@@ -93,6 +95,7 @@ function SidebarLink(
     exact,
     href,
     depth,
+    iconIndentBase,
     className,
     expanded,
     onDisclosureClick,
@@ -110,10 +113,12 @@ function SidebarLink(
   const { handleMouseEnter, handleMouseLeave } = useClickIntent(onClickIntent);
   const style = React.useMemo(
     () => ({
-      paddingInlineStart: `${(depth || 0) * 16 + (icon ? -8 : 12)}px`,
+      paddingInlineStart: `${
+        (depth || 0) * 16 + (icon ? (iconIndentBase ?? -8) : 12)
+      }px`,
       paddingInlineEnd: unreadBadge ? "32px" : undefined,
     }),
-    [depth, icon, unreadBadge]
+    [depth, icon, iconIndentBase, unreadBadge]
   );
 
   const unreadStyle = React.useMemo(
@@ -168,7 +173,9 @@ function SidebarLink(
             />
           )}
           {icon && <IconWrapper aria-hidden>{icon}</IconWrapper>}
-          <Label $ellipsis={ellipsis} $iconOnly={iconOnly}>{label}</Label>
+          <Label $ellipsis={ellipsis} $iconOnly={iconOnly}>
+            {label}
+          </Label>
           {unreadBadge && <UnreadBadge style={unreadStyle} />}
         </Content>
       </ContextMenu>
@@ -399,7 +406,9 @@ const Label = styled.div<{ $ellipsis: boolean; $iconOnly: boolean }>`
 
   ${(props) => props.$ellipsis && ellipsis()}
 
-  ${(props) => props.$iconOnly && `
+  ${(props) =>
+    props.$iconOnly &&
+    `
     position: absolute;
     width: 1px;
     height: 1px;

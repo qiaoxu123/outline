@@ -337,12 +337,10 @@ function MultiplayerEditor(
     return () => window.removeEventListener("error", onUnhandledError);
   }, [t]);
 
-  if (!remoteProvider) {
-    return null;
-  }
-
   // while the collaborative document is loading, we render a version of the
-  // document from the last text cache in read-only mode if we have it.
+  // the document from the last text cache while multiplayer loads. Keeping
+  // this fallback interactive is important in the desktop shell, where the
+  // collaboration socket may become ready after the document is painted.
   const isLocalReady = !hasLocalPersistence || isLocalSynced;
   const showCache =
     !isLocalReady && !isRemoteSynced && hasContent(props.defaultValue);
@@ -358,7 +356,7 @@ function MultiplayerEditor(
           scrollTo={props.scrollTo}
           headingPrefix={props.headingPrefix}
           cacheOnly
-          readOnly
+          readOnly={props.readOnly || editorVersionBehind}
           ref={ref}
         />
       )}
@@ -369,14 +367,7 @@ function MultiplayerEditor(
         defaultValue={undefined}
         extensions={extensions}
         ref={showCache ? undefined : ref}
-        style={
-          showCache
-            ? {
-                height: 0,
-                opacity: 0,
-              }
-            : undefined
-        }
+        style={showCache ? { display: "none" } : undefined}
         className={showCursorNames ? "show-cursor-names" : undefined}
       />
     </>

@@ -10,6 +10,7 @@ import DocumentsLoader from "~/components/DocumentsLoader";
 import { ResizingHeightContainer } from "~/components/ResizingHeightContainer";
 import Text from "~/components/Text";
 import useStores from "~/hooks/useStores";
+import { useActiveSidebarContext } from "~/hooks/useActiveSidebarContext";
 import history from "~/utils/history";
 import useCollectionDocuments from "../hooks/useCollectionDocuments";
 import { useDropToChangeCollection } from "../hooks/useDragAndDrop";
@@ -22,6 +23,10 @@ import Folder from "./Folder";
 import PlaceholderCollections from "./PlaceholderCollections";
 import { useSidebarDisclosure } from "./SidebarDisclosureContext";
 import SidebarLink from "./SidebarLink";
+import {
+  activeDocumentIdForSidebarTree,
+  useSidebarContext,
+} from "./SidebarContext";
 
 // The number of child documents to initially render
 const DEFAULT_PAGE_SIZE = 50;
@@ -52,6 +57,8 @@ function CollectionLinkChildren({
   const pageSize = DEFAULT_PAGE_SIZE;
   const { documents, ui } = useStores();
   const { t } = useTranslation();
+  const sidebarContext = useSidebarContext();
+  const activeSidebarContext = useActiveSidebarContext();
   const activeDocument = documents.active;
   const childDocuments = useCollectionDocuments(collection, activeDocument);
   const [showing, setShowing] = useState(pageSize);
@@ -70,7 +77,11 @@ function CollectionLinkChildren({
 
   const expansion = useSidebarExpansionState(
     childDocuments,
-    ui.activeDocumentId
+    activeDocumentIdForSidebarTree(
+      ui.activeDocumentId,
+      activeSidebarContext,
+      sidebarContext
+    )
   );
 
   // Handle collection-level alt-click cascade from DraggableCollectionLink

@@ -13,6 +13,7 @@ import {
 import { isHash } from "~/utils/urls";
 import useStores from "./useStores";
 import { isFirefox } from "@shared/utils/browser";
+import { openInTab } from "~/utils/tabNavigation";
 
 type Params = {
   /** The share ID of the document being viewed, if any */
@@ -21,7 +22,7 @@ type Params = {
 
 export default function useEditorClickHandlers({ shareId }: Params) {
   const history = useHistory();
-  const { documents, ui } = useStores();
+  const { documents, tabs, ui } = useStores();
   const handleClickLink = useCallback(
     (href: string, event?: MouseEvent) => {
       // on page hash
@@ -102,7 +103,17 @@ export default function useEditorClickHandlers({ shareId }: Params) {
           (!isModKey(event) && !event.shiftKey && event.button !== 1)
         ) {
           ui.setPresentingDocument(null);
-          history.push(navigateTo, { sidebarContext: "collections" }); // optimistic preference of "collections"
+          const document = documents.get(navigateTo);
+          if (!shareId && document) {
+            openInTab(history, tabs, {
+              id: document.id,
+              url: navigateTo,
+              title: document.title,
+              emoji: document.icon,
+            });
+          } else {
+            history.push(navigateTo, { sidebarContext: "collections" }); // optimistic preference of "collections"
+          }
         } else if (
           isSplitViewModifierEvent(event) &&
           event.button !== 1 &&
@@ -116,7 +127,7 @@ export default function useEditorClickHandlers({ shareId }: Params) {
         window.open(href, "_blank");
       }
     },
-    [history, shareId, documents, ui]
+    [history, shareId, documents, tabs, ui]
   );
 
   return { handleClickLink };

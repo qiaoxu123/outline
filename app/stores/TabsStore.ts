@@ -1,5 +1,6 @@
 import { action, computed, observable } from "mobx";
 import type RootStore from "~/stores/RootStore";
+import type { SidebarContextType } from "~/components/Sidebar/components/SidebarContext";
 
 export interface Tab {
   id: string;
@@ -7,15 +8,14 @@ export interface Tab {
   title: string;
   emoji?: string | null;
   pinned: boolean;
+  sidebarContext?: SidebarContextType;
 }
 
 type StoredTabs = Record<string, Tab[]>;
 const STORAGE_KEY = "outline.desktop.tabs.v1";
 
 function tabIdentity(tab: Pick<Tab, "id" | "url">): string {
-  return tab.url.startsWith("/doc/")
-    ? tab.url.replace(/\/edit$/, "")
-    : tab.id;
+  return tab.url.startsWith("/doc/") ? tab.url.replace(/\/edit$/, "") : tab.id;
 }
 
 function normalizeTabs(tabs: Tab[]): Tab[] {
@@ -85,13 +85,16 @@ export default class TabsStore {
       ...tab,
       pinned: tab.pinned ?? false,
     };
-    if (this.tabs.some((item) => tabIdentity(item) === tabIdentity(normalized))) return;
+    if (this.tabs.some((item) => tabIdentity(item) === tabIdentity(normalized)))
+      return;
     this.setTabs([...this.tabs, normalized]);
   }
 
   @action
   update(id: string, patch: Partial<Tab>): void {
-    this.setTabs(this.tabs.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab)));
+    this.setTabs(
+      this.tabs.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab))
+    );
   }
 
   @action
@@ -105,7 +108,11 @@ export default class TabsStore {
 
   @action
   togglePin(id: string): void {
-    this.setTabs(this.tabs.map((tab) => (tab.id === id ? { ...tab, pinned: !tab.pinned } : tab)));
+    this.setTabs(
+      this.tabs.map((tab) =>
+        tab.id === id ? { ...tab, pinned: !tab.pinned } : tab
+      )
+    );
   }
 
   @action

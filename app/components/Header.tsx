@@ -34,11 +34,13 @@ type Props = {
     | ((props: { isCompact: boolean }) => React.ReactNode)
     | React.ReactNode;
   hasSidebar?: boolean;
+  /** Whether to hide this header at tablet widths and above */
+  hiddenOnDesktop?: boolean;
   className?: string;
 };
 
 function Header(
-  { left, title, actions, hasSidebar, className }: Props,
+  { left, title, actions, hasSidebar, hiddenOnDesktop, className }: Props,
   ref: React.RefObject<HTMLDivElement> | null
 ) {
   const { ui } = useStores();
@@ -95,6 +97,7 @@ function Header(
         className={className}
         $passThrough={passThrough}
         $insetTitleAdjust={ui.sidebarIsClosed && Desktop.hasInsetTitlebar()}
+        $hiddenOnDesktop={hiddenOnDesktop}
       >
         {left || hasMobileSidebar ? (
           <Breadcrumbs ref={setBreadcrumbRef}>
@@ -164,6 +167,7 @@ const Actions = styled(Flex)`
 type WrapperProps = {
   $passThrough?: boolean;
   $insetTitleAdjust?: boolean;
+  $hiddenOnDesktop?: boolean;
 };
 
 const Wrapper = styled(Flex)<WrapperProps>`
@@ -208,6 +212,7 @@ const Wrapper = styled(Flex)<WrapperProps>`
   }
 
   ${breakpoint("tablet")`
+    ${(props: WrapperProps) => props.$hiddenOnDesktop && `display: none;`}
     padding: 12px;
     ${(props: WrapperProps) => props.$insetTitleAdjust && `padding-left: 64px;`}
     `};

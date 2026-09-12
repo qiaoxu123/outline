@@ -2,6 +2,7 @@ import { observer } from "mobx-react";
 import * as React from "react";
 import { DndProvider } from "react-dnd";
 import { useLocation } from "react-router-dom";
+import styled from "styled-components";
 import { EditorAwareHTML5Backend } from "~/components/EditorAwareHTML5Backend";
 import ErrorSuspended from "~/scenes/Errors/ErrorSuspended";
 import Layout from "~/components/Layout";
@@ -112,8 +113,10 @@ const AuthenticatedLayout: React.FC = ({ children }: Props) => {
               <RegisterKeyDown trigger="n" handler={goToNewDocument} />
               <RegisterKeyDown trigger="t" handler={goToSearch} />
               <RegisterKeyDown trigger="/" handler={goToSearch} />
-              <TabBar />
-              {children}
+              <ContentStack>
+                <TabBar />
+                {children}
+              </ContentStack>
               <CommandBar />
               <NotificationBadge />
             </Layout>
@@ -123,5 +126,14 @@ const AuthenticatedLayout: React.FC = ({ children }: Props) => {
     </DocumentContextProvider>
   );
 };
+
+const ContentStack = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+`;
 
 export default observer(AuthenticatedLayout);
