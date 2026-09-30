@@ -26,8 +26,8 @@ const collectionCache = createWorkspaceReadCache<CustomCollection[]>(60_000);
 const treeCache = createWorkspaceReadCache<CustomDocument[]>(60_000);
 
 /** Read every collection page, coalescing concurrent workspace discovery. */
-export function listCollections(scope = "default", force = false): Promise<CustomCollection[]> {
-  return collectionCache(scope, async () => {
+export function listCollections(scope?: string, force = false): Promise<CustomCollection[]> {
+  const load = async () => {
     const result: CustomCollection[] = [];
     for (let offset = 0; ; offset += 100) {
       const response = await client.post<{ data: CustomCollection[] }>(
@@ -39,19 +39,21 @@ export function listCollections(scope = "default", force = false): Promise<Custo
         return result;
       }
     }
-  }, force);
+  };
+  return scope ? collectionCache(scope, load, force) : load();
 }
 
 /** Share collection trees between custom scenes without crossing workspaces. */
 export function collectionDocuments(
-  collectionId: string, scope = "default", force = false
+  collectionId: string, scope?: string, force = false
 ): Promise<CustomDocument[]> {
-  return treeCache(`${scope}:${collectionId}`, async () => {
+  const load = async () => {
     const response = await client.post<{ data: CustomDocument[] }>(
       "/collections.documents", { id: collectionId }
     );
     return response.data ?? [];
-  }, force);
+  };
+  return scope ? treeCache(`${scope}:${collectionId}`, load, force) : load();
 }
 
 export function flattenDocuments(tree: CustomDocument[]): CustomDocument[] {

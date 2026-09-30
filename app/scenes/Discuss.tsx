@@ -207,6 +207,12 @@ function DiscussWorkspace() {
       setError(null);
       try {
         const snapshot = await refreshTopics(scope, async () => {
+        const assertWorkspace = () => {
+          if ((auth.currentTeamId ?? window.location.host) !== scope) {
+            throw new Error("工作区已切换，取消旧索引任务。");
+          }
+        };
+        assertWorkspace();
         const collections = await listCollections(scope, force);
         const forum = collections.find((item) =>
           ["论坛空间", "讨论区"].includes(item.name.trim())
@@ -219,6 +225,7 @@ function DiscussWorkspace() {
           writeJson(`${topicCacheKey}.${scope}`, empty);
           return empty;
         }
+        assertWorkspace();
         const tree = await collectionDocuments(forum.id, scope, force);
         const cats = tree.filter((item) => (item.children?.length ?? 0) > 0);
         const categoryIds = new Set(cats.map((item) => item.id));
@@ -250,6 +257,7 @@ function DiscussWorkspace() {
         const pageSize = refreshPlan.mode === "changed" ? 20 : 100;
         const listed: Topic[] = [];
         for (let offset = 0; offset < 10000; offset += pageSize) {
+          assertWorkspace();
           const response = await client.post<{
             data: Topic[];
             pagination?: { total?: number };
@@ -306,6 +314,7 @@ function DiscussWorkspace() {
           forumCollectionId: forum.id,
           forumFound: true,
         };
+        assertWorkspace();
         writeJson(`${topicCacheKey}.${scope}`, snapshot);
         return snapshot;
         });
@@ -396,6 +405,7 @@ function DiscussWorkspace() {
             const pageSize = commentRefreshPlan.mode === "changed" ? 20 : 100;
             const comments: DiscussionComment[] = [];
             for (let offset = 0; offset < 10000; offset += pageSize) {
+              if (cancelled) { return; }
               const response = await client.post<{
                 data: DiscussionComment[];
                 pagination?: { total?: number };

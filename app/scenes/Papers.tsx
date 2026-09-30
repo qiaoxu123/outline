@@ -330,7 +330,7 @@ function PapersWorkspace() {
           offset < ids.length;
           offset += PAPER_VIEW_CONCURRENCY
         ) {
-          if (cancelled) { break; }
+          if (cancelled || (auth.currentTeamId ?? window.location.host) !== paperScope) { break; }
           const batchIds = ids.slice(offset, offset + PAPER_VIEW_CONCURRENCY);
           const results = await Promise.allSettled(
             batchIds.map(async (id) => {
@@ -378,6 +378,12 @@ function PapersWorkspace() {
     setError(null);
     let cancelled = false;
     const request = refreshPapers(paperScope, async () => {
+        const assertWorkspace = () => {
+          if ((auth.currentTeamId ?? window.location.host) !== paperScope) {
+            throw new Error("工作区已切换，取消旧索引任务。");
+          }
+        };
+        assertWorkspace();
         const syncStartedAt = Date.now();
         const collections = await listCollections(paperScope, refreshKey > 0);
         const knownSourceIds = new Set(cached?.sourceCollectionIds ?? []);
@@ -397,10 +403,10 @@ function PapersWorkspace() {
         const treeResults = await settleWithConcurrency(
           sourceCollections,
           PAPER_SOURCE_CONCURRENCY,
-          async (collection) => ({
-            collection,
-            tree: await collectionDocuments(collection.id, paperScope, refreshKey > 0),
-          })
+          async (collection) => {
+            assertWorkspace();
+            return { collection, tree: await collectionDocuments(collection.id, paperScope, refreshKey > 0) };
+          }
         );
         const failedTree = treeResults.find(
           (result) => result.status === "rejected"
@@ -487,6 +493,7 @@ function PapersWorkspace() {
         const scanCollection = async (collectionId: string) => {
           const pageSize = refreshPlan.mode === "changed" ? 20 : 100;
           for (let offset = 0; offset < 5000; offset += pageSize) {
+            assertWorkspace();
             const response = await client.post<{
               data: CustomDocument[];
               pagination?: { total?: number };
@@ -546,6 +553,7 @@ function PapersWorkspace() {
         for (const paper of unique) {
           nextMetas[paper.id] ??= emptyMeta;
         }
+        assertWorkspace();
         const complete = scanResults.every(
           (result) => result.status === "fulfilled"
         );
