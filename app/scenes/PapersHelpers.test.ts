@@ -303,3 +303,20 @@ describe("summarizePaperTags", () => {
     });
   });
 });
+
+
+describe("paper state transitions", () => {
+  it("advances an implicit unread state on the first click", async () => {
+    const { nextPaperReadState } = await import("./PapersHelpers");
+    expect(nextPaperReadState()).toBe("reading");
+    expect(nextPaperReadState("reading")).toBe("read");
+    expect(nextPaperReadState("read")).toBe("unread");
+  });
+  it("retains other users' ratings when updating or clearing my score", async () => {
+    const { optimisticPaperRating } = await import("./PapersHelpers");
+    // Two ratings: mine=2, another user's=4.
+    const updated = optimisticPaperRating({ average: 3, count: 2, mine: 2 }, 5);
+    expect(updated).toEqual({ average: 4.5, count: 2, mine: 5 });
+    expect(optimisticPaperRating(updated, null)).toEqual({ average: 4, count: 1, mine: null });
+  });
+});

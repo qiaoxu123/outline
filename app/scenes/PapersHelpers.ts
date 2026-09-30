@@ -29,6 +29,18 @@ export type PaperScope = "all" | "liked" | "history";
 export type ReadState = "unread" | "reading" | "read";
 export type PaperSort = "updated" | "views" | "likes" | "score" | "title";
 
+/** Advance even an implicit unread state on the first click. */
+export function nextPaperReadState(state?: string): ReadState {
+  return state === "reading" ? "read" : state === "read" ? "unread" : "reading";
+}
+
+/** Update only the current user's contribution to an aggregate rating. */
+export function optimisticPaperRating(previous: Rating | undefined, mine: number | null): Rating {
+  const count = (previous?.count ?? 0) - (previous?.mine ? 1 : 0) + (mine ? 1 : 0);
+  const sum = (previous?.average ?? 0) * (previous?.count ?? 0) - (previous?.mine ?? 0) + (mine ?? 0);
+  return { average: count > 0 ? sum / count : 0, count, mine };
+}
+
 export type PaperListOptions = {
   query: string;
   tag: string | null;

@@ -1,3 +1,4 @@
+import { observer } from "mobx-react";
 import {
   AcademicCapIcon,
   CodeIcon,
@@ -27,6 +28,8 @@ import {
 } from "./customData";
 import {
   filterAndSortPapers,
+  nextPaperReadState,
+  optimisticPaperRating,
   planPaperMetadataRefresh,
   parsePaperData,
   parsePaperMeta,
@@ -46,6 +49,9 @@ import {
   settleWithConcurrency,
 } from "./RefreshHelpers";
 
+import { createSharedRefresh, enqueueWorkspaceWrite } from "./WorkspaceRequests";
+import { WorkspaceNotice, WorkspacePagination, useWorkspacePage } from "./WorkspaceList";
+
 const PAPER = "📖";
 const readKey = "outline.desktop.papers.read.v1";
 const likesKey = "outline.desktop.papers.likes.v1";
@@ -58,7 +64,7 @@ const PAPER_VIEW_REFRESH_LIMIT = 24;
 const PAPER_VIEW_CONCURRENCY = 4;
 const PAPER_SOURCE_CONCURRENCY = 3;
 const PAPER_METADATA_CONCURRENCY = 2;
-const refreshingPaperScopes = new Set<string>();
+const refreshPapers = createSharedRefresh<PaperSnapshot>();
 const interactionPath = "论文库/interactions.json";
 type InteractionData = {
   version: 1;
@@ -201,7 +207,7 @@ function readMap(key: string): Record<string, string> {
   }
 }
 
-export default function Papers() {
+function PapersWorkspace() {
   const { documents, tabs, auth } = useStores();
   const user = useCurrentUser({ rejectOnEmpty: false });
   const history = useHistory();
@@ -218,6 +224,7 @@ export default function Papers() {
   );
   const [loading, setLoading] = React.useState(() => !initialSnapshot);
   const [metadataLoading, setMetadataLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState("");
   const [refreshKey, setRefreshKey] = React.useState(0);
   const [scope, setScope] = React.useState<PaperScope>("all");
@@ -226,6 +233,7 @@ export default function Papers() {
   const [readFilter, setReadFilter] = React.useState<ReadState | "">("");
   const [sort, setSort] = React.useState<PaperSort>("updated");
   const [tag, setTag] = React.useState<string | null>(null);
+  const [showAllTags, setShowAllTags] = React.useState(false);
   const scopedReadKey = `${readKey}.${paperScope}`;
   const scopedLikesKey = `${likesKey}.${paperScope}`;
   const [read, setRead] = React.useState(readMap(scopedReadKey));
@@ -322,6 +330,7 @@ export default function Papers() {
           offset < ids.length;
           offset += PAPER_VIEW_CONCURRENCY
         ) {
+          if (cancelled) { break; }
           const batchIds = ids.slice(offset, offset + PAPER_VIEW_CONCURRENCY);
           const results = await Promise.allSettled(
             batchIds.map(async (id) => {
@@ -365,20 +374,15 @@ export default function Papers() {
     } else {
       setLoading(true);
     }
-    // A route change should not start a second full metadata crawl while the
-    // first one is already writing the same workspace snapshot.
-    if (refreshingPaperScopes.has(paperScope)) {
-      return;
-    }
-    refreshingPaperScopes.add(paperScope);
     setMetadataLoading(true);
+    setError(null);
     let cancelled = false;
-    void (async () => {
-      try {
+    const request = refreshPapers(paperScope, async () => {
         const syncStartedAt = Date.now();
-        const collections = await listCollections();
+        const collections = await listCollections(paperScope, refreshKey > 0);
         const knownSourceIds = new Set(cached?.sourceCollectionIds ?? []);
         const discoverSources =
+          refreshKey > 0 ||
           knownSourceIds.size === 0 ||
           !cached?.sourcesDiscoveredAt ||
           syncStartedAt - cached.sourcesDiscoveredAt >=
@@ -395,7 +399,7 @@ export default function Papers() {
           PAPER_SOURCE_CONCURRENCY,
           async (collection) => ({
             collection,
-            tree: await collectionDocuments(collection.id),
+            tree: await collectionDocuments(collection.id, paperScope, refreshKey > 0),
           })
         );
         const failedTree = treeResults.find(
@@ -463,7 +467,7 @@ export default function Papers() {
           savedAt: syncStartedAt,
           papers: unique,
           metas: cached?.metas ?? {},
-          complete: cached?.complete,
+          complete: false,
           metadataSyncedAt: cached?.metadataSyncedAt,
           sourceCollectionIds: [...scanCollectionIds],
           sourcesDiscoveredAt: discoverSources
@@ -477,7 +481,9 @@ export default function Papers() {
             cached?.metas[paper.id] ? [[paper.id, cached.metas[paper.id]]] : []
           )
         ) as Record<string, Meta>;
-        const refreshPlan = planPaperMetadataRefresh(cached);
+        const refreshPlan = planPaperMetadataRefresh(
+          unique.some((paper) => !cached?.metas[paper.id]) ? null : cached
+        );
         const scanCollection = async (collectionId: string) => {
           const pageSize = refreshPlan.mode === "changed" ? 20 : 100;
           for (let offset = 0; offset < 5000; offset += pageSize) {
@@ -524,7 +530,7 @@ export default function Papers() {
             savedAt: syncStartedAt,
             papers: unique,
             metas: progressMetas,
-            complete: refreshPlan.mode === "changed" ? cached?.complete : false,
+            complete: false,
             metadataSyncedAt: cached?.metadataSyncedAt,
             sourceCollectionIds: [...scanCollectionIds],
             sourcesDiscoveredAt: discoverSources
@@ -543,34 +549,44 @@ export default function Papers() {
         const complete = scanResults.every(
           (result) => result.status === "fulfilled"
         );
-        writePaperSnapshot(paperScope, {
+        const snapshot: PaperSnapshot = {
           savedAt: Date.now(),
           papers: unique,
           metas: nextMetas,
-          complete:
-            refreshPlan.mode === "changed"
-              ? Boolean(cached?.complete)
-              : complete,
+          complete,
           metadataSyncedAt: complete ? syncStartedAt : cached?.metadataSyncedAt,
           sourceCollectionIds: [...scanCollectionIds],
           sourcesDiscoveredAt: discoverSources
             ? syncStartedAt
             : cached?.sourcesDiscoveredAt,
-        });
-        if (!cancelled) {
-          setPapers([...unique]);
-          setMetas(nextMetas);
+        };
+        writePaperSnapshot(paperScope, snapshot);
+        if (!complete) {
+          throw new Error("部分论文元数据未能更新，已保留可用索引。请稍后重试。");
         }
-      } catch (error) {
-        Logger.error("Failed to load papers", toError(error));
-      } finally {
-        refreshingPaperScopes.delete(paperScope);
-        if (!cancelled) {
-          setLoading(false);
-          setMetadataLoading(false);
-        }
+        return snapshot;
+    });
+    void request.then((snapshot) => {
+      if (!cancelled) {
+        setPapers(snapshot.papers);
+        setMetas(snapshot.metas);
       }
-    })();
+    }).catch((cause) => {
+      Logger.error("Failed to load papers", toError(cause));
+      if (!cancelled) {
+        const usable = readPaperSnapshot(paperScope);
+        if (usable) {
+          setPapers(usable.papers);
+          setMetas(usable.metas);
+        }
+        setError(cause instanceof Error ? cause.message : "论文库更新失败，请重试。");
+      }
+    }).finally(() => {
+      if (!cancelled) {
+        setLoading(false);
+        setMetadataLoading(false);
+      }
+    });
     return () => {
       cancelled = true;
     };
@@ -641,21 +657,22 @@ export default function Papers() {
     ]
   );
 
+  const pagination = useWorkspacePage(visible.length, JSON.stringify([query, tag, year, month, readFilter, scope, sort]));
+  const pageItems = visible.slice(pagination.page * pagination.pageSize, (pagination.page + 1) * pagination.pageSize);
+  const clearFilters = () => {
+    setQuery(""); setTag(null); setYear(null); setMonth(null); setReadFilter(""); setScope("all");
+  };
+
   const cycleRead = (id: string) => {
     const next = {
       ...read,
-      [id]:
-        read[id] === "unread"
-          ? "reading"
-          : read[id] === "reading"
-            ? "read"
-            : "unread",
+      [id]: nextPaperReadState(read[id]),
     };
     setRead(next);
     localStorage.setItem(scopedReadKey, JSON.stringify(next));
   };
   const toggleLike = (id: string) => {
-    if (!user) {
+    if (!user || !window.DesktopBridge) {
       return;
     }
     const next = { ...likes };
@@ -671,11 +688,13 @@ export default function Papers() {
       [id]: Math.max(0, (current[id] ?? 0) + (liked ? 1 : -1)),
     }));
     localStorage.setItem(scopedLikesKey, JSON.stringify(next));
-    void (async () => {
-      try {
+    void enqueueWorkspaceWrite(`${paperScope}:${interactionPath}`, async () => {
         const currentResult = asWebdavResult(
           await window.DesktopBridge?.webdavGet(interactionPath)
         );
+        if (!currentResult.ok) {
+          throw new Error("无法读取共享点赞数据，请检查 WebDAV 设置。");
+        }
         const current: InteractionData = currentResult?.data?.found
           ? JSON.parse(currentResult.data.content ?? "{}")
           : { version: 1, papers: {} };
@@ -689,7 +708,7 @@ export default function Papers() {
         } else {
           const entry = { ...paper[user.id] };
           delete entry.like;
-          if (entry.at) {
+          if (entry.score) {
             paper[user.id] = entry;
           } else {
             delete paper[user.id];
@@ -700,30 +719,34 @@ export default function Papers() {
         } else {
           delete current.papers[id];
         }
-        await window.DesktopBridge?.webdavPut(
+        const saved = asWebdavResult(await window.DesktopBridge?.webdavPut(
           interactionPath,
           JSON.stringify(current, null, 2)
-        );
-      } catch (error) {
-        Logger.error("Failed to save paper like", toError(error));
-      }
-    })();
+        ));
+        if (!saved.ok) {
+          throw new Error("点赞尚未同步，请检查 WebDAV 后重试。");
+        }
+    }).catch((cause) => {
+      setError(cause instanceof Error ? cause.message : "点赞同步失败");
+    });
   };
   const setScore = (id: string) => {
-    if (!user) {
+    if (!user || !window.DesktopBridge) {
       return;
     }
     const current = ratings[id]?.mine ?? 0;
     const score = current >= 5 ? null : current + 1;
     setRatings((previous) => ({
       ...previous,
-      [id]: { average: score ?? 0, count: score ? 1 : 0, mine: score },
+      [id]: optimisticPaperRating(previous[id], score),
     }));
-    void (async () => {
-      try {
+    void enqueueWorkspaceWrite(`${paperScope}:${interactionPath}`, async () => {
         const result = asWebdavResult(
           await window.DesktopBridge?.webdavGet(interactionPath)
         );
+        if (!result.ok) {
+          throw new Error("无法读取共享评分数据，请检查 WebDAV 设置。");
+        }
         const data: InteractionData = result?.data?.found
           ? JSON.parse(result.data.content ?? "{}")
           : { version: 1, papers: {} };
@@ -747,14 +770,16 @@ export default function Papers() {
         } else {
           delete data.papers[id];
         }
-        await window.DesktopBridge?.webdavPut(
+        const saved = asWebdavResult(await window.DesktopBridge?.webdavPut(
           interactionPath,
           JSON.stringify(data, null, 2)
-        );
-      } catch (error) {
-        Logger.error("Failed to save paper score", toError(error));
-      }
-    })();
+        ));
+        if (!saved.ok) {
+          throw new Error("评分尚未同步，请检查 WebDAV 后重试。");
+        }
+    }).catch((cause) => {
+      setError(cause instanceof Error ? cause.message : "评分同步失败");
+    });
   };
   const open = (paper: Paper) => {
     const nextViewed = { ...viewed, [paper.id]: new Date().toISOString() };
@@ -822,8 +847,8 @@ export default function Papers() {
               {item === "all"
                 ? `全部 ${papers.length}`
                 : item === "liked"
-                  ? `我赞过 ${Object.keys(likes).length}`
-                  : `最近浏览 ${Object.keys(viewed).length}`}
+                  ? `我赞过 ${papers.filter((paper) => likes[paper.id]).length}`
+                  : `最近浏览 ${papers.filter((paper) => viewed[paper.id]).length}`}
             </ScopeButton>
           ))}
         </ScopeBar>
@@ -917,7 +942,7 @@ export default function Papers() {
         {allTags.length > 0 && (
           <TagBar aria-label="热门领域标签">
             <TagHeading>热门领域</TagHeading>
-            {allTags.map((item) => (
+            {(showAllTags ? allTags : allTags.slice(0, 8)).map((item) => (
               <Tag
                 type="button"
                 key={item}
@@ -927,6 +952,7 @@ export default function Papers() {
                 {item} <TagCount>{tagCounts.get(item)}</TagCount>
               </Tag>
             ))}
+            {allTags.length > 8 && <ButtonSmall neutral onClick={() => setShowAllTags((value) => !value)}>{showAllTags ? "收起" : `更多领域 +${allTags.length - 8}`}</ButtonSmall>}
           </TagBar>
         )}
         {(query.trim() ||
@@ -941,13 +967,14 @@ export default function Papers() {
             {scope === "history" && <span> · 按最近浏览排序</span>}
           </Summary>
         )}
+        {error && <WorkspaceNotice role="alert">{error}</WorkspaceNotice>}
         {loading ? (
           <Empty>正在加载论文库…</Empty>
         ) : visible.length === 0 ? (
-          <Empty>没有匹配的论文。可以清除筛选条件后再试。</Empty>
+          <Empty>{papers.length === 0 ? "尚未找到论文。请检查推荐阅读、组内工作或精选专题目录。" : <>没有匹配的论文。<ButtonSmall neutral onClick={clearFilters}>清除筛选</ButtonSmall></>}</Empty>
         ) : (
           <List>
-            {visible.map((paper) => {
+            {pageItems.map((paper) => {
               const meta = metas[paper.id] ?? emptyMeta;
               const tagSummary = summarizePaperTags(meta.tags ?? [], 4);
               const state = read[paper.id] ?? "unread";
@@ -966,7 +993,7 @@ export default function Papers() {
                   tabIndex={0}
                   onClick={() => open(paper)}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
+                    if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
                       event.preventDefault();
                       open(paper);
                     }
@@ -993,7 +1020,7 @@ export default function Papers() {
                       {meta.venue && <span>{meta.venue}</span>}
                       {(viewCounts[paper.id] ?? 0) > 0 && (
                         <span>
-                          <EyeIcon size={13} /> {viewCounts[paper.id]} 人读过
+                          <EyeIcon size={13} /> {viewCounts[paper.id]} 次阅读
                         </span>
                       )}
                       {tagSummary.visible.map((item) => (
@@ -1027,6 +1054,8 @@ export default function Papers() {
                           toggleLike(paper.id);
                         }}
                         $active={!!likes[paper.id]}
+                        aria-pressed={!!likes[paper.id]}
+                        disabled={!user || !window.DesktopBridge}
                         aria-label={likes[paper.id] ? "取消点赞" : "点赞"}
                       >
                         <ThumbsUpIcon size={15} />
@@ -1036,7 +1065,7 @@ export default function Papers() {
                       </IconButton>
                     </Tooltip>
                     <Tooltip
-                      content="点击循环评分，5 星后清除"
+                      content={`我的评分：${ratings[paper.id]?.mine ?? "未评分"}；点击加一星，5 星后清除`}
                       placement="bottom"
                     >
                       <IconButton
@@ -1046,6 +1075,7 @@ export default function Papers() {
                           setScore(paper.id);
                         }}
                         $active={!!ratings[paper.id]?.mine}
+                        disabled={!user || !window.DesktopBridge}
                         aria-label={`评分 ${ratings[paper.id]?.average?.toFixed(1) ?? "未评分"}`}
                       >
                         <StarredIcon size={15} />
@@ -1104,15 +1134,22 @@ export default function Papers() {
             })}
           </List>
         )}
+        <WorkspacePagination {...pagination} total={visible.length} onChange={pagination.setPage} />
       </Board>
     </Scene>
   );
 }
 
+export default observer(function Papers() {
+  const { auth } = useStores();
+  return <PapersWorkspace key={auth.currentTeamId ?? window.location.host} />;
+});
+
 const Board = styled.div`
-  width: min(100%, 1280px);
+  width: min(100%, 1160px);
+  box-sizing: border-box;
   margin: 0 auto;
-  padding: 22px 28px 56px;
+  padding: 24px clamp(16px, 3vw, 32px) 48px;
 
   @media (max-width: 700px) {
     padding: 12px 16px 40px;
@@ -1123,9 +1160,8 @@ const Toolbar = styled.div`
   gap: 10px;
   align-items: center;
   margin: 10px 0 12px;
-  padding: 10px;
-  border: 1px solid ${(p) => p.theme.divider};
-  border-radius: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid ${(p) => p.theme.divider};
   background: ${(p) => p.theme.background};
   flex-wrap: wrap;
 
@@ -1152,7 +1188,7 @@ const HeaderCopy = styled.div`
 const PageHeading = styled.h1`
   margin: 0 0 5px;
   color: ${(props) => props.theme.text};
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 700;
   letter-spacing: -0.025em;
   line-height: 1.2;
@@ -1187,17 +1223,19 @@ const ScopeBar = styled.div`
   display: flex;
   gap: 6px;
   flex-shrink: 0;
+  flex-wrap: wrap;
   padding-bottom: 2px;
 `;
 const ScopeButton = styled.button<{ $active: boolean }>`
   border: 1px solid ${(p) => (p.$active ? p.theme.accent : p.theme.divider)};
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 5px 11px;
   color: ${(p) => (p.$active ? p.theme.accent : p.theme.textSecondary)};
   background: ${(p) =>
     p.$active ? p.theme.backgroundSecondary : p.theme.background};
   font-size: 13px;
   cursor: pointer;
+  &:disabled { opacity: 0.5; cursor: default; }
   &:hover {
     color: ${(p) => p.theme.text};
     background: ${(p) => p.theme.backgroundSecondary};
@@ -1209,7 +1247,7 @@ const ScopeButton = styled.button<{ $active: boolean }>`
 `;
 const SearchBox = styled.div`
   flex: 1;
-  min-width: 220px;
+  min-width: min(220px, 100%);
 `;
 const FilterLabel = styled.label`
   display: flex;
@@ -1256,7 +1294,7 @@ const TagHeading = styled.span`
 `;
 const Tag = styled.button<{ $active?: boolean }>`
   border: 1px solid ${(p) => (p.$active ? p.theme.accent : p.theme.divider)};
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 3px 8px;
   color: ${(p) => (p.$active ? p.theme.accent : p.theme.textSecondary)};
   background: ${(p) =>
@@ -1295,7 +1333,8 @@ const List = styled.div`
 const Row = styled.div`
   display: flex;
   align-items: flex-start;
-  gap: 18px;
+  gap: 16px;
+  @media (max-width: 820px) { flex-wrap: wrap; > :first-child { flex-basis: 100%; } }
   padding: 16px 10px;
   border-bottom: 1px solid ${(p) => p.theme.divider};
   border-radius: 5px;
@@ -1394,14 +1433,15 @@ const IconButton = styled.button<{ $active: boolean }>`
   align-items: center;
   justify-content: center;
   gap: 3px;
-  min-width: 28px;
-  height: 28px;
-  padding: 0 5px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 7px;
   border: 0;
   border-radius: 5px;
   background: transparent;
   color: ${(p) => (p.$active ? p.theme.accent : p.theme.textTertiary)};
   cursor: pointer;
+  &:disabled { opacity: 0.5; cursor: default; }
   &:hover {
     color: ${(p) => p.theme.text};
     background: ${(p) => p.theme.backgroundTertiary};
@@ -1415,11 +1455,12 @@ const IconLink = styled.a`
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border-radius: 5px;
   color: ${(p) => p.theme.textTertiary};
   cursor: pointer;
+  &:disabled { opacity: 0.5; cursor: default; }
   &:hover {
     color: ${(p) => p.theme.text};
     background: ${(p) => p.theme.backgroundTertiary};
@@ -1490,7 +1531,7 @@ const OverflowTag = styled.span`
   min-height: 22px;
   padding: 2px 7px;
   border: 1px solid ${(p) => p.theme.divider};
-  border-radius: 999px;
+  border-radius: 6px;
   color: ${(p) => p.theme.textTertiary};
   background: ${(p) => p.theme.background};
   font-size: 11px;
@@ -1500,3 +1541,4 @@ const ReadText = styled.span`
     display: none;
   }
 `;
+

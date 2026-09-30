@@ -1,3 +1,4 @@
+import { createWorkspaceReadCache } from "./WorkspaceRequests";
 import { client } from "~/utils/ApiClient";
 
 export type CustomDocument = {
@@ -21,22 +22,36 @@ export type CustomDocument = {
 
 export type CustomCollection = { id: string; name: string };
 
-export async function listCollections(): Promise<CustomCollection[]> {
-  const response = await client.post<{ data: CustomCollection[] }>(
-    "/collections.list",
-    {}
-  );
-  return response.data ?? [];
+const collectionCache = createWorkspaceReadCache<CustomCollection[]>(60_000);
+const treeCache = createWorkspaceReadCache<CustomDocument[]>(60_000);
+
+/** Read every collection page, coalescing concurrent workspace discovery. */
+export function listCollections(scope = "default", force = false): Promise<CustomCollection[]> {
+  return collectionCache(scope, async () => {
+    const result: CustomCollection[] = [];
+    for (let offset = 0; ; offset += 100) {
+      const response = await client.post<{ data: CustomCollection[] }>(
+        "/collections.list", { limit: 100, offset }
+      );
+      const page = response.data ?? [];
+      result.push(...page);
+      if (page.length < 100) {
+        return result;
+      }
+    }
+  }, force);
 }
 
-export async function collectionDocuments(
-  collectionId: string
+/** Share collection trees between custom scenes without crossing workspaces. */
+export function collectionDocuments(
+  collectionId: string, scope = "default", force = false
 ): Promise<CustomDocument[]> {
-  const response = await client.post<{ data: CustomDocument[] }>(
-    "/collections.documents",
-    { id: collectionId }
-  );
-  return response.data ?? [];
+  return treeCache(`${scope}:${collectionId}`, async () => {
+    const response = await client.post<{ data: CustomDocument[] }>(
+      "/collections.documents", { id: collectionId }
+    );
+    return response.data ?? [];
+  }, force);
 }
 
 export function flattenDocuments(tree: CustomDocument[]): CustomDocument[] {
@@ -55,3 +70,4 @@ export function findDocument(tree: CustomDocument[], title: string) {
     (document) => document.title.trim() === title
   );
 }
+

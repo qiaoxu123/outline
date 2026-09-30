@@ -1,3 +1,4 @@
+import { observer } from "mobx-react";
 import { CommentIcon, EyeIcon, PinIcon, ThumbsUpIcon } from "outline-icons";
 import * as React from "react";
 import { useHistory } from "react-router-dom";
@@ -34,6 +35,9 @@ import {
   selectChangedRefreshItems,
 } from "./RefreshHelpers";
 
+import { createSharedRefresh, createWorkspaceReadCache, enqueueWorkspaceWrite } from "./WorkspaceRequests";
+import { WorkspacePagination, useWorkspacePage } from "./WorkspaceList";
+
 type Topic = Omit<CustomDocument, "createdBy"> & {
   parentDocumentId?: string | null;
   createdBy?: {
@@ -68,6 +72,9 @@ type TopicSnapshot = {
   forumCollectionId: string | null;
   forumFound: boolean;
 };
+
+const refreshTopics = createSharedRefresh<TopicSnapshot>();
+const readPins = createWorkspaceReadCache<Record<string, string>>(60_000);
 
 const likesPath = "讨论区/likes.json";
 const likeCacheKey = "outline.desktop.discuss.likes.v2";
@@ -128,7 +135,7 @@ function categoryMap(categories: CustomDocument[]): Map<string, string> {
   return result;
 }
 
-export default function Discuss() {
+function DiscussWorkspace() {
   const { documents, tabs, auth } = useStores();
   const user = useCurrentUser({ rejectOnEmpty: false });
   const history = useHistory();
@@ -153,6 +160,8 @@ export default function Discuss() {
   const [category, setCategory] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(() => !initialSnapshot);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [statsRefresh, setStatsRefresh] = React.useState(0);
+  const [pinPending, setPinPending] = React.useState<Record<string, boolean>>({});
   const [composing, setComposing] = React.useState(false);
   const [creating, setCreating] = React.useState(false);
   const [title, setTitle] = React.useState("");
@@ -172,10 +181,12 @@ export default function Discuss() {
   );
   const [pins, setPins] = React.useState<Record<string, string>>({});
   const [error, setError] = React.useState<string | null>(null);
-  const likeWriteChain = React.useRef<Promise<void>>(Promise.resolve());
+  const requestId = React.useRef(0);
 
   const load = React.useCallback(
     async (force = false) => {
+      const generation = ++requestId.current;
+      if (force) { setStatsRefresh((value) => value + 1); }
       const cached = readJson<TopicSnapshot | null>(
         `${topicCacheKey}.${scope}`,
         null
@@ -195,26 +206,20 @@ export default function Discuss() {
       setRefreshing(true);
       setError(null);
       try {
-        const collections = await listCollections();
+        const snapshot = await refreshTopics(scope, async () => {
+        const collections = await listCollections(scope, force);
         const forum = collections.find((item) =>
           ["论坛空间", "讨论区"].includes(item.name.trim())
         );
         if (!forum) {
-          setForumFound(false);
-          setForumCollectionId(null);
-          setTopics([]);
-          setCategories([]);
-          writeJson(`${topicCacheKey}.${scope}`, {
-            savedAt: Date.now(),
-            topics: [],
-            categories: [],
-            forumCollectionId: null,
-            forumFound: false,
-            complete: true,
-          } satisfies TopicSnapshot);
-          return;
+          const empty: TopicSnapshot = {
+            savedAt: Date.now(), topics: [], categories: [],
+            forumCollectionId: null, forumFound: false, complete: true,
+          };
+          writeJson(`${topicCacheKey}.${scope}`, empty);
+          return empty;
         }
-        const tree = await collectionDocuments(forum.id);
+        const tree = await collectionDocuments(forum.id, scope, force);
         const cats = tree.filter((item) => (item.children?.length ?? 0) > 0);
         const categoryIds = new Set(cats.map((item) => item.id));
         const categoryOf = categoryMap(cats);
@@ -229,7 +234,7 @@ export default function Discuss() {
                   categoryOf.get(item.id) ?? item.parentDocumentId ?? null,
               }) as Topic
           );
-        if (!cached) {
+        if (!cached && requestId.current === generation) {
           setForumFound(true);
           setForumCollectionId(forum.id);
           setCategories(cats);
@@ -302,15 +307,23 @@ export default function Discuss() {
           forumFound: true,
         };
         writeJson(`${topicCacheKey}.${scope}`, snapshot);
-        setForumFound(true);
-        setForumCollectionId(forum.id);
-        setCategories(cats);
-        setTopics(nextTopics);
+        return snapshot;
+        });
+        if (requestId.current === generation) {
+          setForumFound(snapshot.forumFound);
+          setForumCollectionId(snapshot.forumCollectionId);
+          setCategories(snapshot.categories);
+          setTopics(snapshot.topics);
+        }
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "加载失败");
+        if (requestId.current === generation) {
+          setError(cause instanceof Error ? cause.message : "加载失败");
+        }
       } finally {
-        setRefreshing(false);
-        setLoading(false);
+        if (requestId.current === generation) {
+          setRefreshing(false);
+          setLoading(false);
+        }
       }
     },
     [scope]
@@ -318,6 +331,7 @@ export default function Discuss() {
 
   React.useEffect(() => {
     void load();
+    return () => { requestId.current += 1; };
   }, [load]);
 
   React.useEffect(() => {
@@ -364,7 +378,7 @@ export default function Discuss() {
         let commentsFullSyncedAt = cache.commentsFullSyncedAt;
         const now = Date.now();
         const needsComments =
-          topics.some((topic) => !cache.stats[topic.id]) ||
+          statsRefresh > 0 || topics.some((topic) => !cache.stats[topic.id]) ||
           now - commentsSavedAt >= COMMENT_CACHE_TTL;
         if (needsComments) {
           try {
@@ -445,7 +459,7 @@ export default function Discuss() {
           topics,
           next,
           Date.now(),
-          VIEW_CACHE_TTL,
+          statsRefresh > 0 ? 0 : VIEW_CACHE_TTL,
           VIEW_REFRESH_LIMIT
         );
         for (
@@ -490,30 +504,27 @@ export default function Discuss() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [forumCollectionId, scope, topics]);
+  }, [forumCollectionId, scope, topics, statsRefresh]);
 
   React.useEffect(() => {
     let cancelled = false;
-    void client
-      .post<{
+    void readPins(scope, async () => {
+      const response = await client.post<{
         data:
           | { id: string; documentId: string }[]
           | { pins: { id: string; documentId: string }[] };
-      }>("/pins.list", { limit: 100 })
-      .then((response) => {
-        if (!cancelled) {
-          const data = response.data;
-          const pinList = Array.isArray(data) ? data : (data?.pins ?? []);
-          setPins(
-            Object.fromEntries(pinList.map((pin) => [pin.documentId, pin.id]))
-          );
-        }
-      })
+      }>("/pins.list", { limit: 100 });
+      const data = response.data;
+      const pinList = Array.isArray(data) ? data : (data?.pins ?? []);
+      return Object.fromEntries(pinList.map((pin) => [pin.documentId, pin.id]));
+    }, statsRefresh > 0).then((next) => {
+      if (!cancelled) { setPins(next); }
+    })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [topics.length]);
+  }, [scope, statsRefresh]);
 
   const createTopic = async () => {
     if (!title.trim() || creating || !forumCollectionId) {
@@ -530,8 +541,9 @@ export default function Discuss() {
       });
       setComposing(false);
       setTitle("");
-      await load(true);
       if (response.data) {
+        setTopics((current) => [response.data, ...current.filter((topic) => topic.id !== response.data.id)]);
+        localStorage.removeItem(`${topicCacheKey}.${scope}`);
         openInTab(history, tabs, {
           id: response.data.id,
           url:
@@ -547,12 +559,13 @@ export default function Discuss() {
   };
 
   const toggleLike = (id: string) => {
-    if (!user) {
+    if (!user || !window.DesktopBridge) {
       return;
     }
+    const liked = !likeData.topics[id]?.[user.id];
     const mutate = (current: LikeData): LikeData => {
       const users = { ...current.topics[id] };
-      if (users[user.id]) {
+      if (!liked) {
         delete users[user.id];
       } else {
         users[user.id] = {
@@ -573,30 +586,37 @@ export default function Discuss() {
       localStorage.setItem(`${likeCacheKey}.${scope}`, JSON.stringify(next));
       return next;
     });
-    likeWriteChain.current = likeWriteChain.current
-      .then(async () => {
+    void enqueueWorkspaceWrite(`${scope}:${likesPath}`, async () => {
         const result = asWebdavResult(
           await window.DesktopBridge?.webdavGet(likesPath)
         );
+        if (!result.ok) {
+          throw new Error("无法读取共享点赞数据，请检查 WebDAV 设置。");
+        }
         const latest =
           result.ok && result.data?.found
             ? parseLikes(result.data.content)
             : emptyLikes;
         const merged = mutate(latest);
-        await window.DesktopBridge?.webdavPut(
+        const saved = asWebdavResult(await window.DesktopBridge?.webdavPut(
           likesPath,
           JSON.stringify(merged, null, 2)
-        );
-        setLikeData(merged);
+        ));
+        if (!saved.ok) {
+          throw new Error("点赞尚未同步，请检查 WebDAV 后重试。");
+        }
+        // Keep later optimistic clicks intact while the queue drains.
         localStorage.setItem(
           `${likeCacheKey}.${scope}`,
           JSON.stringify(merged)
         );
       })
-      .catch(() => undefined);
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "点赞同步失败"));
   };
 
   const togglePin = async (id: string) => {
+    if (pinPending[id]) { return; }
+    setPinPending((current) => ({ ...current, [id]: true }));
     try {
       if (pins[id]) {
         await client.post("/pins.delete", { id: pins[id] });
@@ -614,12 +634,16 @@ export default function Discuss() {
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "置顶操作失败");
+    } finally {
+      setPinPending((current) => ({ ...current, [id]: false }));
     }
   };
 
-  const visible = visibleTopics(topics, pins, { category, query });
-  const pinnedTopics = visible.filter((topic) => pins[topic.id]);
-  const regularTopics = visible.filter((topic) => !pins[topic.id]);
+  const visible = React.useMemo(() => visibleTopics(topics, pins, { category, query }), [topics, pins, category, query]);
+  const pagination = useWorkspacePage(visible.length, JSON.stringify([category, query]));
+  const pageItems = visible.slice(pagination.page * pagination.pageSize, (pagination.page + 1) * pagination.pageSize);
+  const pinnedTopics = pageItems.filter((topic) => pins[topic.id]);
+  const regularTopics = pageItems.filter((topic) => !pins[topic.id]);
   const categoryNames = new Map(
     categories.map((item) => [item.id, item.title])
   );
@@ -648,7 +672,7 @@ export default function Discuss() {
         tabIndex={0}
         onClick={() => openTopic(topic)}
         onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
+          if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
             event.preventDefault();
             openTopic(topic);
           }
@@ -660,13 +684,13 @@ export default function Discuss() {
         />
         <Avatar aria-hidden>
           {topic.createdBy?.avatarUrl ? (
-            <img src={topic.createdBy.avatarUrl} alt="" />
+            <img src={topic.createdBy.avatarUrl} alt="" loading="lazy" decoding="async" />
           ) : (
             (topic.createdBy?.name ?? "成").slice(0, 1)
           )}
         </Avatar>
         <TopicMain>
-          <TopicTitle>
+          <TopicTitle $unread={unread}>
             {pins[topic.id] && <PinIcon size={13} aria-label="已置顶" />}
             {topic.title || "无标题"}
           </TopicTitle>
@@ -689,17 +713,18 @@ export default function Discuss() {
         <Metrics>
           <Metric title={`${activity?.viewCount ?? 0} 人阅读`}>
             <EyeIcon size={15} />
-            <span>{activity?.viewCount ?? 0}</span>
+            <span>{activity ? activity.viewCount : "—"}</span>
           </Metric>
           <Metric title={`${activity?.replyCount ?? 0} 条回复`}>
             <CommentIcon size={15} />
-            <span>{activity?.replyCount ?? 0}</span>
+            <span>{activity ? activity.replyCount : "—"}</span>
           </Metric>
           <Tooltip content={liked ? "取消点赞" : "点赞"} placement="bottom">
             <IconButton
               type="button"
               aria-label={liked ? "取消点赞" : "点赞"}
               aria-pressed={liked}
+              disabled={!user || !window.DesktopBridge}
               $active={liked}
               onClick={(event) => {
                 event.stopPropagation();
@@ -718,6 +743,7 @@ export default function Discuss() {
               type="button"
               aria-label={pins[topic.id] ? "取消置顶" : "置顶"}
               aria-pressed={!!pins[topic.id]}
+              disabled={!!pinPending[topic.id]}
               $active={!!pins[topic.id]}
               onClick={(event) => {
                 event.stopPropagation();
@@ -755,7 +781,7 @@ export default function Discuss() {
                     (total, item) => total + item.replyCount,
                     0
                   )} 条回复`
-                : "准备加载中"}
+                : loading ? "准备加载中" : "暂无讨论"}
             </FeatureStats>
             <Actions>
               <ButtonSmall
@@ -765,7 +791,7 @@ export default function Discuss() {
               >
                 {loading || refreshing ? "刷新中…" : "刷新"}
               </ButtonSmall>
-              <ButtonSmall onClick={() => setComposing(true)}>
+              <ButtonSmall disabled={!forumCollectionId || loading} onClick={() => setComposing(true)}>
                 <CommentIcon size={15} />
                 发起讨论
               </ButtonSmall>
@@ -792,16 +818,20 @@ export default function Discuss() {
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") {
+                  if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                     void createTopic();
                   }
                   if (event.key === "Escape") {
                     setComposing(false);
                   }
                 }}
+                aria-label="讨论标题"
+                disabled={creating}
                 placeholder="用一句话写下讨论主题…"
               />
               <ComposerSelect
+                aria-label="讨论版块"
+                disabled={creating}
                 value={selectedCategory}
                 onChange={(event) => setSelectedCategory(event.target.value)}
               >
@@ -873,7 +903,7 @@ export default function Discuss() {
         ) : !forumFound ? (
           <Empty>尚未找到“讨论区”或“论坛空间”集合。</Empty>
         ) : visible.length === 0 ? (
-          <Empty>暂时没有匹配的讨论主题。</Empty>
+          <Empty>{topics.length === 0 ? "还没有讨论，发起第一个主题吧。" : <>没有匹配的讨论。<ButtonSmall neutral onClick={() => { setQuery(""); setCategory(null); }}>清除筛选</ButtonSmall></>}</Empty>
         ) : (
           <List>
             {pinnedTopics.length > 0 && <GroupLabel>置顶讨论</GroupLabel>}
@@ -884,15 +914,22 @@ export default function Discuss() {
             {regularTopics.map(renderTopic)}
           </List>
         )}
+        <WorkspacePagination {...pagination} total={visible.length} onChange={pagination.setPage} />
       </Board>
     </Scene>
   );
 }
 
+export default observer(function Discuss() {
+  const { auth } = useStores();
+  return <DiscussWorkspace key={auth.currentTeamId ?? window.location.host} />;
+});
+
 const Board = styled.div`
-  width: min(100%, 1280px);
+  width: min(100%, 1160px);
+  box-sizing: border-box;
   margin: 0 auto;
-  padding: 22px 28px 56px;
+  padding: 24px clamp(16px, 3vw, 32px) 48px;
 
   @media (max-width: 700px) {
     padding: 12px 16px 40px;
@@ -926,7 +963,7 @@ const HeaderCopy = styled.div`
 const PageHeading = styled.h1`
   margin: 0 0 5px;
   color: ${(props) => props.theme.text};
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 700;
   letter-spacing: -0.025em;
   line-height: 1.2;
@@ -962,9 +999,8 @@ const Toolbar = styled.div`
   gap: 8px;
   align-items: center;
   margin: 0 0 12px;
-  padding: 10px;
-  border: 1px solid ${(p) => p.theme.divider};
-  border-radius: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid ${(p) => p.theme.divider};
   background: ${(p) => p.theme.background};
 
   @media (max-width: 700px) {
@@ -974,7 +1010,7 @@ const Toolbar = styled.div`
 `;
 const SearchBox = styled.div`
   flex: 1;
-  min-width: 220px;
+  min-width: min(220px, 100%);
 `;
 const ComposerPanel = styled.section`
   margin-bottom: 14px;
@@ -1039,7 +1075,7 @@ const Category = styled.button<{ $active: boolean }>`
   flex-shrink: 0;
   padding: 5px 10px;
   border: 1px solid ${(p) => (p.$active ? p.theme.accent : p.theme.divider)};
-  border-radius: 999px;
+  border-radius: 6px;
   color: ${(p) => (p.$active ? p.theme.accent : p.theme.textTertiary)};
   background: ${(p) =>
     p.$active ? p.theme.backgroundSecondary : p.theme.background};
@@ -1095,7 +1131,8 @@ const Row = styled.div`
   display: flex;
   gap: 12px;
   align-items: center;
-  padding: 15px 10px 15px 6px;
+  padding: 16px 8px;
+  @media (max-width: 600px) { flex-wrap: wrap; > :last-child { margin-left: 53px; } }
   border-bottom: 1px solid ${(p) => p.theme.divider};
   border-radius: 5px;
   cursor: pointer;
@@ -1143,19 +1180,21 @@ const TopicMain = styled.div`
   min-width: 0;
   flex: 1;
 `;
-const TopicTitle = styled.div`
-  display: flex;
+const TopicTitle = styled.div<{ $unread: boolean }>`
+  display: block;
   gap: 5px;
   align-items: center;
   overflow: hidden;
   color: ${(p) => p.theme.text};
   font-size: 16px;
-  font-weight: 600;
+  font-weight: ${(p) => p.$unread ? 600 : 500};
   text-overflow: ellipsis;
   white-space: nowrap;
 
   svg {
-    flex-shrink: 0;
+    display: inline-block;
+    vertical-align: -2px;
+    margin-right: 5px;
     color: ${(p) => p.theme.accent};
   }
 `;
@@ -1167,7 +1206,8 @@ const TopicMeta = styled.div`
   overflow: hidden;
   color: ${(p) => p.theme.textTertiary};
   font-size: 12px;
-  white-space: nowrap;
+  flex-wrap: wrap;
+  white-space: normal;
 `;
 const AuthorName = styled.span`
   color: ${(p) => p.theme.textSecondary};
@@ -1177,7 +1217,7 @@ const TopicCategory = styled.span`
   overflow: hidden;
   padding: 1px 6px;
   border: 1px solid ${(p) => p.theme.divider};
-  border-radius: 999px;
+  border-radius: 6px;
   color: ${(p) => p.theme.textSecondary};
   background: ${(p) => p.theme.backgroundSecondary};
   text-overflow: ellipsis;
@@ -1214,7 +1254,7 @@ const IconButton = styled.button<{ $active?: boolean }>`
   min-width: 38px;
   height: 28px;
   gap: 4px;
-  padding: 0 5px;
+  padding: 0 7px;
   border: 0;
   border-radius: 5px;
   color: ${(p) => (p.$active ? p.theme.accent : p.theme.textTertiary)};
@@ -1241,3 +1281,4 @@ const PinButton = styled(IconButton)`
     opacity: 1;
   }
 `;
+
