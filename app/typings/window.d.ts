@@ -75,7 +75,7 @@ declare global {
 
       /** Shared desktop storage for profile-scoped extensions. */
       webdavGet: (path: string) => Promise<unknown>;
-      webdavPut: (path: string, content: string) => Promise<unknown>;
+      webdavPut: (path: string, content: string, expectedEtag?: string | null) => Promise<unknown>;
 
       /**
        * Loads the authentication configuration for the given host from the main
