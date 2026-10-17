@@ -320,3 +320,45 @@ describe("paper state transitions", () => {
     expect(optimisticPaperRating(updated, null)).toEqual({ average: 4, count: 1, mine: null });
   });
 });
+
+describe("paper popularity and filtered counts", () => {
+  const options = {
+    query: "",
+    tag: null,
+    year: null,
+    month: null,
+    readFilter: "" as const,
+    scope: "all" as const,
+    sort: "likes" as const,
+  };
+
+  it("ranks team-wide likes rather than only my likes", () => {
+    const papers = [
+      { id: "mine", title: "Mine", updatedAt: "2026-10-13" },
+      { id: "popular", title: "Popular", updatedAt: "2026-10-12" },
+      { id: "newest", title: "Newest", updatedAt: "2026-10-14" },
+    ];
+    expect(
+      filterAndSortPapers({
+        papers, metas: {}, read: {}, likes: { mine: "1" },
+        likeCounts: { mine: 1, popular: 12, newest: 1 },
+        viewed: {}, viewCounts: {}, ratings: {}, options,
+      }).map((paper) => paper.id)
+    ).toEqual(["popular", "newest", "mine"]);
+  });
+
+  it("preserves the personal liked-only filter without changing popularity order", () => {
+    expect(
+      filterAndSortPapers({
+        papers: [
+          { id: "a", title: "A" },
+          { id: "b", title: "B" },
+        ],
+        metas: {}, read: {}, likes: { a: "1" },
+        likeCounts: { a: 1, b: 100 },
+        viewed: {}, viewCounts: {}, ratings: {},
+        options: { ...options, scope: "liked" },
+      }).map((paper) => paper.id)
+    ).toEqual(["a"]);
+  });
+});
