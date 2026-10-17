@@ -307,7 +307,7 @@ function PapersWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [scopedLikesKey, user?.id]);
+  }, [scopedLikesKey, user?.id, refreshKey]);
 
   React.useEffect(() => {
     if (!papers.length) {
