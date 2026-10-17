@@ -357,9 +357,12 @@ function DiscussWorkspace() {
   }, [load]);
 
   React.useEffect(() => {
-    let cancelled = false;
     setLikeData(readJson(`${likeCacheKey}.${scope}`, emptyLikes));
     setSeen(readJson(`${seenKey}.${scope}`, {}));
+  }, [scope]);
+
+  React.useEffect(() => {
+    let cancelled = false;
     void window.DesktopBridge?.webdavGet(likesPath)
       .then((value) => {
         const result = asWebdavResult(value);
@@ -374,7 +377,7 @@ function DiscussWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [scope]);
+  }, [scope, statsRefresh]);
 
   React.useEffect(() => {
     if (!topics.length || !forumCollectionId) {
