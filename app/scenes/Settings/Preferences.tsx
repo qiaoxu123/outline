@@ -24,6 +24,7 @@ import useStores from "~/hooks/useStores";
 import UserDelete from "../UserDelete";
 import { AutoLaunchSetting } from "./components/AutoLaunchSetting";
 import SettingRow from "./components/SettingRow";
+import DesktopWebdavSettings from "./components/DesktopWebdavSettings";
 
 function Preferences() {
   const { t } = useTranslation();
@@ -344,6 +345,8 @@ function Preferences() {
           labelHidden
         />
       </SettingRow>
+
+      <DesktopWebdavSettings />
 
       {can.delete && (
         <>
