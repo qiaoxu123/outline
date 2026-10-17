@@ -4,6 +4,7 @@ export type TopicLike = {
   parentDocumentId?: string | null;
   updatedAt?: string;
   createdAt?: string;
+  createdBy?: { name?: string };
 };
 
 export type DiscussionTopicStats = {
@@ -18,9 +19,15 @@ export type DiscussionComment = {
   createdAt?: string;
 };
 
+export type TopicSort = "activity" | "newest" | "replies" | "views";
+
 export type TopicListOptions = {
   category: string | null;
   query: string;
+  sort?: TopicSort;
+  unreadOnly?: boolean;
+  seen?: Record<string, string>;
+  firstOpenedAt?: string;
 };
 
 export type DiscussionTopicRefreshState = {
@@ -75,21 +82,45 @@ export function mergeDiscussionTopics<T extends TopicLike>(
   );
 }
 
+/** Latest discussion activity (replies included) determines default order. */
 export function visibleTopics<T extends TopicLike>(
   topics: T[],
   pins: Record<string, string>,
-  options: TopicListOptions
+  options: TopicListOptions,
+  stats: Record<string, DiscussionTopicStats> = {}
 ): T[] {
-  const query = options.query.trim().toLowerCase();
-
+  const query = options.query.trim().toLocaleLowerCase();
+  const lastActivity = (topic: T) =>
+    stats[topic.id]?.lastActivity || topic.updatedAt || topic.createdAt || "";
+  const timestamp = (value: string | undefined): number => {
+    const valueMs = value ? new Date(value).getTime() : 0;
+    return Number.isFinite(valueMs) ? valueMs : 0;
+  };
   return topics
     .filter((topic) => {
       if (options.category && topic.parentDocumentId !== options.category) {
         return false;
       }
-      return !query || topic.title.toLowerCase().includes(query);
+      if (query && ![topic.title, topic.createdBy?.name ?? ""]
+        .join(" ").toLocaleLowerCase().includes(query)) {
+        return false;
+      }
+      return !options.unreadOnly || isTopicUnread(
+        lastActivity(topic), options.seen?.[topic.id] ?? options.firstOpenedAt
+      );
     })
-    .sort((a, b) => Number(!!pins[b.id]) - Number(!!pins[a.id]));
+    .sort((a, b) => {
+      const pinned = Number(!!pins[b.id]) - Number(!!pins[a.id]);
+      if (pinned) return pinned;
+      const order = options.sort ?? "activity";
+      let difference = 0;
+      if (order === "newest") difference = timestamp(b.createdAt) - timestamp(a.createdAt);
+      else if (order === "replies") difference = (stats[b.id]?.replyCount ?? 0) - (stats[a.id]?.replyCount ?? 0);
+      else if (order === "views") difference = (stats[b.id]?.viewCount ?? 0) - (stats[a.id]?.viewCount ?? 0);
+      else difference = timestamp(lastActivity(b)) - timestamp(lastActivity(a));
+      return difference || timestamp(b.createdAt) - timestamp(a.createdAt) ||
+        a.id.localeCompare(b.id);
+    });
 }
 
 export function formatTopicTime(
