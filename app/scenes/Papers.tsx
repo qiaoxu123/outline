@@ -30,7 +30,7 @@ import {
   filterAndSortPapers,
   nextPaperReadState,
   optimisticPaperRating,
-  planPaperMetadataRefresh,
+  planPaperMetadataHydration,
   parsePaperData,
   parsePaperMeta,
   selectChangedPaperDocuments,
@@ -490,10 +490,7 @@ function PapersWorkspace() {
         // One new paper must not force a full re-scan of every collection.
         // Use the changed-document scan first, then fetch remaining missing
         // metadata directly by document ID. Large imports still get a full scan.
-        const missingBeforeScan = unique.filter((paper) => !cached?.metas[paper.id]);
-        const refreshPlan = planPaperMetadataRefresh(
-          missingBeforeScan.length > 24 ? null : cached
-        );
+        const refreshPlan = planPaperMetadataHydration(cached, unique);
         const scanCollection = async (collectionId: string) => {
           const pageSize = refreshPlan.mode === "changed" ? 20 : 100;
           let exhausted = false;
