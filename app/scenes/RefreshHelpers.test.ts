@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   fulfilledRefreshEntries,
   selectChangedRefreshItems,
+  selectNewDiscussionComments,
   settleWithConcurrency,
 } from "./RefreshHelpers";
 
@@ -64,6 +65,39 @@ describe("refresh scheduling", () => {
         { id: "unknown" },
       ],
       reachedCheckpoint: true,
+    });
+  });
+
+  it("评论修改后依然按创建时间判断，不重复计数已有回复", () => {
+    expect(
+      selectNewDiscussionComments(
+        [
+          { id: "new", createdAt: "2026-10-17T11:00:00Z", updatedAt: "2026-10-17T11:15:00Z" },
+          { id: "edited-old", createdAt: "2026-10-16T09:00:00Z", updatedAt: "2026-10-17T12:00:00Z" },
+        ],
+        "2026-10-17T10:00:00Z",
+        "2026-10-17T11:30:00Z"
+      )
+    ).toEqual({
+      changed: [{ id: "new", createdAt: "2026-10-17T11:00:00Z", updatedAt: "2026-10-17T11:15:00Z" }],
+      reachedCheckpoint: true,
+    });
+  });
+
+  it("跳过未来创建与无效时间，不提前推进已处理范围", () => {
+    expect(
+      selectNewDiscussionComments(
+        [
+          { id: "future", createdAt: "2026-10-17T13:00:00Z" },
+          { id: "unknown", createdAt: "bad-date" },
+          { id: "current", createdAt: "2026-10-17T11:00:00Z" },
+        ],
+        "2026-10-17T10:00:00Z",
+        "2026-10-17T12:00:00Z"
+      )
+    ).toEqual({
+      changed: [{ id: "current", createdAt: "2026-10-17T11:00:00Z" }],
+      reachedCheckpoint: false,
     });
   });
 
