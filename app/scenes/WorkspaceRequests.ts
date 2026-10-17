@@ -60,3 +60,57 @@ export function enqueueWorkspaceWrite(
   void next.then(clear, clear);
   return next;
 }
+
+type WebdavReadResult = {
+  ok?: boolean;
+  data?: { found?: boolean; content?: string | null; etag?: string | null };
+  error?: { code?: string; message?: string };
+};
+
+type WebdavWriteResult = {
+  ok?: boolean;
+  error?: { code?: string; message?: string };
+};
+
+/**
+ * Optimistic concurrency across desktops sharing a WebDAV JSON file.
+ * A 412 precondition failure means another client has already updated it;
+ * re-read and re-apply the user's mutation to that latest document.
+ *
+ * Servers not returning ETag cannot guarantee concurrency safety for
+ * existing files. Newly created files are still protected with If-None-Match.
+ */
+export async function updateSharedWebdavJson<T>(
+  bridge: {
+    webdavGet: (path: string) => Promise<unknown>;
+    webdavPut: (
+      path: string, content: string, expectedEtag?: string | null
+    ) => Promise<unknown>;
+  },
+  path: string,
+  parse: (content: string | undefined) => T,
+  mutate: (current: T) => T,
+  maxAttempts = 3
+): Promise<T> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const read = await bridge.webdavGet(path) as WebdavReadResult;
+    if (!read?.ok) {
+      throw new Error(read?.error?.message ?? "无法读取共享数据");
+    }
+    const found = !!read.data?.found;
+    const current = parse(found ? read.data?.content ?? undefined : undefined);
+    const next = mutate(current);
+    const etag = found ? read.data?.etag ?? undefined : null;
+    const written = await bridge.webdavPut(
+      path, JSON.stringify(next, null, 2), etag
+    ) as WebdavWriteResult;
+    if (written?.ok) return next;
+    if (written?.error?.code === "CONFLICT" && attempt + 1 < maxAttempts) {
+      continue;
+    }
+    throw new Error(
+      written?.error?.message ?? "共享数据写入失败，请刷新后重试"
+    );
+  }
+  throw new Error("共享数据多次发生冲突，请稍后重试");
+}
