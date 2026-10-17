@@ -66,6 +66,7 @@ type FilterInput = {
   metas: Record<string, Meta>;
   read: Record<string, string>;
   likes: Record<string, boolean | string>;
+  likeCounts?: Record<string, number>;
   viewed: Record<string, string>;
   viewCounts: Record<string, number>;
   ratings: Record<string, Rating>;
@@ -276,6 +277,7 @@ export function filterAndSortPapers({
   metas,
   read,
   likes,
+  likeCounts = {},
   viewed,
   viewCounts,
   ratings,
@@ -339,13 +341,17 @@ export function filterAndSortPapers({
       return a.title.localeCompare(b.title, "zh");
     }
     if (options.sort === "views") {
-      return (viewCounts[b.id] ?? 0) - (viewCounts[a.id] ?? 0);
+      return (viewCounts[b.id] ?? 0) - (viewCounts[a.id] ?? 0) || timestamp(b) - timestamp(a);
     }
     if (options.sort === "likes") {
-      return Number(!!likes[b.id]) - Number(!!likes[a.id]);
+      // Team-wide popularity, not just papers the current user liked.
+      const score = (id: string) => likeCounts[id] ?? Number(!!likes[id]);
+      return score(b.id) - score(a.id) || timestamp(b) - timestamp(a);
     }
     if (options.sort === "score") {
-      return (ratings[b.id]?.average ?? 0) - (ratings[a.id]?.average ?? 0);
+      return (ratings[b.id]?.average ?? 0) - (ratings[a.id]?.average ?? 0) ||
+        (ratings[b.id]?.count ?? 0) - (ratings[a.id]?.count ?? 0) ||
+        timestamp(b) - timestamp(a);
     }
     return timestamp(b) - timestamp(a);
   });
