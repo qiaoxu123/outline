@@ -115,15 +115,14 @@ function asWebdavResult(value: unknown): WebdavResult {
 }
 
 function parseLikes(content: string | undefined): LikeData {
-  if (!content) {
-    return emptyLikes;
+  if (!content) return { version: 1, topics: {} };
+  // Never silently replace corrupted shared data with an empty object.
+  const parsed = JSON.parse(content) as LikeData;
+  if (!parsed || !parsed.topics || typeof parsed.topics !== "object" ||
+      Array.isArray(parsed.topics)) {
+    throw new Error("共享讨论点赞数据格式无效");
   }
-  try {
-    const parsed = JSON.parse(content) as LikeData;
-    return parsed && typeof parsed.topics === "object" ? parsed : emptyLikes;
-  } catch {
-    return emptyLikes;
-  }
+  return parsed;
 }
 
 function categoryMap(categories: CustomDocument[]): Map<string, string> {
