@@ -168,7 +168,7 @@ function DiscussWorkspace() {
     const stored = localStorage.getItem(key);
     if (stored) return stored;
     const now = new Date().toISOString();
-    writeJson(key, now);
+    try { localStorage.setItem(key, now); } catch { /* storage unavailable */ }
     return now;
   });
   const [loading, setLoading] = React.useState(() => !initialSnapshot);
