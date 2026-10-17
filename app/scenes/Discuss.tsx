@@ -34,6 +34,7 @@ import {
 import {
   fulfilledRefreshEntries,
   selectChangedRefreshItems,
+  selectNewDiscussionComments,
 } from "./RefreshHelpers";
 import { sumViewCounts } from "./PapersHelpers";
 
@@ -420,6 +421,8 @@ function DiscussWorkspace() {
             );
             const pageSize = commentRefreshPlan.mode === "changed" ? 20 : 100;
             const comments: DiscussionComment[] = [];
+            const seenCommentIds = new Set<string>();
+            let commentsExhausted = false;
             for (let offset = 0; offset < 10000; offset += pageSize) {
               if (cancelled) { return; }
               const response = await client.post<{
@@ -435,7 +438,7 @@ function DiscussWorkspace() {
               const page = response.data ?? [];
               const selected =
                 commentRefreshPlan.mode === "changed"
-                  ? selectChangedRefreshItems(
+                  ? selectNewDiscussionComments(
                       page,
                       commentRefreshPlan.since,
                       new Date(commentsSyncStartedAt).toISOString()
@@ -449,15 +452,23 @@ function DiscussWorkspace() {
                       ),
                       reachedCheckpoint: false,
                     };
-              comments.push(...selected.changed);
+              for (const comment of selected.changed) {
+                if (comment.id && seenCommentIds.has(comment.id)) continue;
+                if (comment.id) seenCommentIds.add(comment.id);
+                comments.push(comment);
+              }
               if (
                 selected.reachedCheckpoint ||
                 page.length < pageSize ||
                 (response.pagination?.total !== undefined &&
                   offset + page.length >= response.pagination.total)
               ) {
+                commentsExhausted = true;
                 break;
               }
+            }
+            if (!commentsExhausted) {
+              throw new Error("评论分页超过单轮安全上限，保留旧统计并等待下次同步");
             }
             next =
               commentRefreshPlan.mode === "full"
