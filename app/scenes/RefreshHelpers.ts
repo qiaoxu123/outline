@@ -69,3 +69,38 @@ export function selectChangedRefreshItems<
   }
   return { changed, reachedCheckpoint };
 }
+
+/**
+ * Comment pages are sorted by createdAt, not updatedAt. Using updatedAt as
+ * an incremental cursor would miss replies whenever an old comment is edited.
+ * The caller periodically runs a complete reconciliation for edits/deletes.
+ */
+export function selectNewDiscussionComments<
+  T extends { id?: string; createdAt?: string },
+>(
+  comments: T[],
+  since: string,
+  until: string
+): { changed: T[]; reachedCheckpoint: boolean } {
+  const checkpoint = new Date(since).getTime();
+  const upperBound = new Date(until).getTime();
+  const changed: T[] = [];
+  let reachedCheckpoint = false;
+  for (const comment of comments) {
+    const createdAt = comment.createdAt
+      ? new Date(comment.createdAt).getTime()
+      : Number.NaN;
+    if (!Number.isFinite(createdAt)) {
+      // Unknown timestamps cannot be safely counted as new replies.
+      // A later full reconciliation will include them.
+      continue;
+    }
+    if (createdAt > upperBound) continue;
+    if (createdAt <= checkpoint) {
+      reachedCheckpoint = true;
+      continue;
+    }
+    changed.push(comment);
+  }
+  return { changed, reachedCheckpoint };
+}
