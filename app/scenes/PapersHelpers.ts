@@ -221,6 +221,22 @@ export function planPaperMetadataRefresh(
 }
 
 /**
+ * Small additions to an otherwise complete snapshot are resolved via
+ * documents.info after the incremental list pass. Larger imports use a
+ * full scan for better throughput.
+ */
+export function planPaperMetadataHydration(
+  cache: (PaperMetadataCacheState & { metas: Record<string, Meta> }) | null,
+  papers: Pick<Paper, "id">[],
+  directFetchLimit = 24
+): PaperMetadataRefreshPlan {
+  const missing = papers.reduce(
+    (count, paper) => count + Number(!cache?.metas[paper.id]), 0
+  );
+  return planPaperMetadataRefresh(missing > directFetchLimit ? null : cache);
+}
+
+/**
  * Pick a bounded set of stale paper view counters. Missing counters are
  * refreshed first, then the oldest successful checks.
  */
