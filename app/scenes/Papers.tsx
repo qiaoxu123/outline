@@ -487,11 +487,16 @@ function PapersWorkspace() {
             cached?.metas[paper.id] ? [[paper.id, cached.metas[paper.id]]] : []
           )
         ) as Record<string, Meta>;
+        // One new paper must not force a full re-scan of every collection.
+        // Use the changed-document scan first, then fetch remaining missing
+        // metadata directly by document ID. Large imports still get a full scan.
+        const missingBeforeScan = unique.filter((paper) => !cached?.metas[paper.id]);
         const refreshPlan = planPaperMetadataRefresh(
-          unique.some((paper) => !cached?.metas[paper.id]) ? null : cached
+          missingBeforeScan.length > 24 ? null : cached
         );
         const scanCollection = async (collectionId: string) => {
           const pageSize = refreshPlan.mode === "changed" ? 20 : 100;
+          let exhausted = false;
           for (let offset = 0; offset < 5000; offset += pageSize) {
             assertWorkspace();
             const response = await client.post<{
@@ -526,8 +531,12 @@ function PapersWorkspace() {
               (response.pagination?.total !== undefined &&
                 offset + page.length >= response.pagination.total)
             ) {
+              exhausted = true;
               break;
             }
+          }
+          if (!exhausted) {
+            throw new Error("论文集合数据超出扫描上限，缓存未标记为完整");
           }
           const progressMetas = { ...nextMetas };
           if (!cancelled) {
@@ -550,13 +559,45 @@ function PapersWorkspace() {
           PAPER_METADATA_CONCURRENCY,
           scanCollection
         );
+        // Documents moved into 推荐阅读 may have an older updatedAt than the
+        // incremental checkpoint. Hydrate only those missing records by ID.
+        const missingAfterScan = refreshPlan.mode === "changed"
+          ? unique.filter((paper) => !nextMetas[paper.id])
+          : [];
+        const detailResults = await settleWithConcurrency(
+          missingAfterScan,
+          PAPER_METADATA_CONCURRENCY,
+          async (paper) => {
+            assertWorkspace();
+            const response = await client.post<{
+              data: CustomDocument | { document: CustomDocument };
+            }>("/documents.info", { id: paper.id });
+            const payload = response.data;
+            const document = payload && "document" in payload
+              ? payload.document : payload;
+            if (!document || document.id !== paper.id) {
+              throw new Error(`无法补齐论文元数据：${paper.id}`);
+            }
+            return [paper.id,
+              typeof document.text === "string"
+                ? parsePaperMeta(document.text)
+                : parsePaperData(document.data),
+            ] as const;
+          }
+        );
+        for (const result of detailResults) {
+          if (result.status === "fulfilled") {
+            const [id, meta] = result.value;
+            nextMetas[id] = meta;
+          }
+        }
         for (const paper of unique) {
           nextMetas[paper.id] ??= emptyMeta;
         }
         assertWorkspace();
         const complete = scanResults.every(
           (result) => result.status === "fulfilled"
-        );
+        ) && detailResults.every((result) => result.status === "fulfilled");
         const snapshot: PaperSnapshot = {
           savedAt: Date.now(),
           papers: unique,
