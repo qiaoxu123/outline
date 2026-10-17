@@ -236,3 +236,55 @@ describe("discussion topic refresh", () => {
     ]);
   });
 });
+
+describe("discussion ordering and unread filters", () => {
+  const topicsWithActivity: TopicLike[] = [
+    { id: "old", title: "Old", createdAt: "2026-10-01T10:00:00Z", updatedAt: "2026-10-01T10:00:00Z" },
+    { id: "new", title: "New", createdAt: "2026-10-12T10:00:00Z", updatedAt: "2026-10-12T10:00:00Z" },
+    { id: "reply", title: "Replied", createdAt: "2026-09-01T10:00:00Z", updatedAt: "2026-09-01T10:00:00Z", createdBy: { name: "乔旭" } },
+  ];
+  const stats = {
+    old: { replyCount: 2, viewCount: 10, lastActivity: "2026-10-01T10:00:00Z" },
+    new: { replyCount: 0, viewCount: 3, lastActivity: "2026-10-12T10:00:00Z" },
+    reply: { replyCount: 17, viewCount: 30, lastActivity: "2026-10-16T10:00:00Z" },
+  };
+
+  it("promotes old topics with recent replies above newly created topics", () => {
+    expect(
+      visibleTopics(topicsWithActivity, {}, { category: null, query: "" }, stats)
+        .map((item) => item.id)
+    ).toEqual(["reply", "new", "old"]);
+  });
+
+  it("supports newest, replies, views and pin priority", () => {
+    expect(
+      visibleTopics(topicsWithActivity, {}, { category: null, query: "", sort: "newest" }, stats)
+        .map((item) => item.id)
+    ).toEqual(["new", "old", "reply"]);
+    expect(
+      visibleTopics(topicsWithActivity, { old: "pin" }, { category: null, query: "", sort: "replies" }, stats)
+        .map((item) => item.id)
+    ).toEqual(["old", "reply", "new"]);
+    expect(
+      visibleTopics(topicsWithActivity, {}, { category: null, query: "", sort: "views" }, stats)
+        .map((item) => item.id)
+    ).toEqual(["reply", "old", "new"]);
+  });
+
+  it("marks only post-baseline activity as unread, respecting seen timestamps", () => {
+    const firstOpenedAt = "2026-10-10T00:00:00Z";
+    expect(
+      visibleTopics(topicsWithActivity, {}, {
+        category: null, query: "", unreadOnly: true, firstOpenedAt,
+        seen: { new: "2026-10-15T00:00:00Z" },
+      }, stats).map((item) => item.id)
+    ).toEqual(["reply"]);
+  });
+
+  it("searches by author name as well as title", () => {
+    expect(
+      visibleTopics(topicsWithActivity, {}, { category: null, query: "乔旭" }, stats)
+        .map((item) => item.id)
+    ).toEqual(["reply"]);
+  });
+});
