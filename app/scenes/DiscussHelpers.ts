@@ -15,6 +15,7 @@ export type DiscussionTopicStats = {
 };
 
 export type DiscussionComment = {
+  id?: string;
   documentId: string;
   createdAt?: string;
 };
