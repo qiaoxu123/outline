@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   filterAndSortPapers,
   planPaperMetadataRefresh,
+  planPaperMetadataHydration,
   parsePaperData,
   parsePaperMeta,
   selectChangedPaperDocuments,
@@ -110,6 +111,35 @@ describe("paper refresh planning", () => {
         complete: false,
       })
     ).toEqual({ mode: "full" });
+  });
+
+  test("少量新入库论文只做增量扫描并定点补元数据", () => {
+    const meta = {
+      tags: [], venue: null, link: null, code: null, enTitle: null,
+      authors: null, org: null, parsed: true,
+    };
+    const snapshot = {
+      savedAt: Date.parse("2026-10-16T09:00:00Z"),
+      metadataSyncedAt: Date.parse("2026-10-16T10:00:00Z"),
+      complete: true,
+      metas: { existing: meta },
+    };
+    expect(planPaperMetadataHydration(snapshot, [
+      { id: "existing" }, { id: "moved-old" }, { id: "new" },
+    ])).toEqual({
+      mode: "changed",
+      since: "2026-10-16T10:00:00.000Z",
+    });
+  });
+
+  test("大批新论文仍使用全量扫描，避免大量逐篇请求", () => {
+    const snapshot = {
+      savedAt: Date.parse("2026-10-16T10:00:00Z"),
+      complete: true,
+      metas: {},
+    };
+    const papers = Array.from({ length: 25 }, (_, i) => ({ id: String(i) }));
+    expect(planPaperMetadataHydration(snapshot, papers)).toEqual({ mode: "full" });
   });
 
   test("阅读量只选未缓存或已过期的论文并限制单次数量", () => {
