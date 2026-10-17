@@ -49,7 +49,7 @@ import {
   settleWithConcurrency,
 } from "./RefreshHelpers";
 
-import { createSharedRefresh, enqueueWorkspaceWrite } from "./WorkspaceRequests";
+import { createSharedRefresh, enqueueWorkspaceWrite, updateSharedWebdavJson } from "./WorkspaceRequests";
 import { WorkspaceNotice, WorkspacePagination, useWorkspacePage } from "./WorkspaceList";
 
 const PAPER = "📖";
@@ -104,6 +104,16 @@ const emptyMeta: Meta = {
 
 function asWebdavResult(value: unknown): WebdavResult {
   return value && typeof value === "object" ? (value as WebdavResult) : {};
+}
+
+function parsePaperInteractions(content?: string): InteractionData {
+  if (!content) return { version: 1, papers: {} };
+  const data = JSON.parse(content) as InteractionData;
+  if (!data || !data.papers || typeof data.papers !== "object" ||
+      Array.isArray(data.papers)) {
+    throw new Error("共享论文交互数据格式无效");
+  }
+  return data;
 }
 
 function readPaperSnapshot(scope: string): PaperSnapshot | null {
@@ -721,7 +731,8 @@ function PapersWorkspace() {
     localStorage.setItem(scopedReadKey, JSON.stringify(next));
   };
   const toggleLike = (id: string) => {
-    if (!user || !window.DesktopBridge) {
+    const bridge = window.DesktopBridge;
+    if (!user || !bridge) {
       return;
     }
     const next = { ...likes };
@@ -738,49 +749,33 @@ function PapersWorkspace() {
     }));
     localStorage.setItem(scopedLikesKey, JSON.stringify(next));
     void enqueueWorkspaceWrite(`${paperScope}:${interactionPath}`, async () => {
-        const currentResult = asWebdavResult(
-          await window.DesktopBridge?.webdavGet(interactionPath)
-        );
-        if (!currentResult.ok) {
-          throw new Error("无法读取共享点赞数据，请检查 WebDAV 设置。");
-        }
-        const current: InteractionData = currentResult?.data?.found
-          ? JSON.parse(currentResult.data.content ?? "{}")
-          : { version: 1, papers: {} };
-        const paper = { ...current.papers[id] };
-        if (liked) {
-          paper[user.id] = {
-            ...paper[user.id],
-            like: true,
-            at: new Date().toISOString(),
-          };
-        } else {
-          const entry = { ...paper[user.id] };
-          delete entry.like;
-          if (entry.score) {
-            paper[user.id] = entry;
+      await updateSharedWebdavJson(
+        bridge, interactionPath, parsePaperInteractions,
+        (current) => {
+          const papers = { ...current.papers };
+          const paper = { ...papers[id] };
+          if (liked) {
+            paper[user.id] = {
+              ...paper[user.id], like: true, at: new Date().toISOString(),
+            };
           } else {
-            delete paper[user.id];
+            const entry = { ...paper[user.id] };
+            delete entry.like;
+            if (entry.score) paper[user.id] = entry;
+            else delete paper[user.id];
           }
+          if (Object.keys(paper).length) papers[id] = paper;
+          else delete papers[id];
+          return { version: 1, papers };
         }
-        if (Object.keys(paper).length) {
-          current.papers[id] = paper;
-        } else {
-          delete current.papers[id];
-        }
-        const saved = asWebdavResult(await window.DesktopBridge?.webdavPut(
-          interactionPath,
-          JSON.stringify(current, null, 2)
-        ));
-        if (!saved.ok) {
-          throw new Error("点赞尚未同步，请检查 WebDAV 后重试。");
-        }
+      );
     }).catch((cause) => {
       setError(cause instanceof Error ? cause.message : "点赞同步失败");
     });
   };
   const setScore = (id: string) => {
-    if (!user || !window.DesktopBridge) {
+    const bridge = window.DesktopBridge;
+    if (!user || !bridge) {
       return;
     }
     const current = ratings[id]?.mine ?? 0;
@@ -790,42 +785,21 @@ function PapersWorkspace() {
       [id]: optimisticPaperRating(previous[id], score),
     }));
     void enqueueWorkspaceWrite(`${paperScope}:${interactionPath}`, async () => {
-        const result = asWebdavResult(
-          await window.DesktopBridge?.webdavGet(interactionPath)
-        );
-        if (!result.ok) {
-          throw new Error("无法读取共享评分数据，请检查 WebDAV 设置。");
+      await updateSharedWebdavJson(
+        bridge, interactionPath, parsePaperInteractions,
+        (current) => {
+          const papers = { ...current.papers };
+          const paper = { ...papers[id] };
+          const entry = { ...paper[user.id], at: new Date().toISOString() };
+          if (score) entry.score = score;
+          else delete entry.score;
+          if (entry.like || entry.score) paper[user.id] = entry;
+          else delete paper[user.id];
+          if (Object.keys(paper).length) papers[id] = paper;
+          else delete papers[id];
+          return { version: 1, papers };
         }
-        const data: InteractionData = result?.data?.found
-          ? JSON.parse(result.data.content ?? "{}")
-          : { version: 1, papers: {} };
-        const paper = { ...data.papers[id] };
-        const entry = {
-          ...paper[user.id],
-          at: new Date().toISOString(),
-        };
-        if (score) {
-          entry.score = score;
-        } else {
-          delete entry.score;
-        }
-        if (entry.like || entry.score) {
-          paper[user.id] = entry;
-        } else {
-          delete paper[user.id];
-        }
-        if (Object.keys(paper).length) {
-          data.papers[id] = paper;
-        } else {
-          delete data.papers[id];
-        }
-        const saved = asWebdavResult(await window.DesktopBridge?.webdavPut(
-          interactionPath,
-          JSON.stringify(data, null, 2)
-        ));
-        if (!saved.ok) {
-          throw new Error("评分尚未同步，请检查 WebDAV 后重试。");
-        }
+      );
     }).catch((cause) => {
       setError(cause instanceof Error ? cause.message : "评分同步失败");
     });
