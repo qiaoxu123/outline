@@ -27,6 +27,7 @@ import {
   planDiscussionTopicRefresh,
   selectTopicViewRefreshIds,
   visibleTopics,
+  type TopicSort,
   type DiscussionComment,
   type DiscussionTopicStats,
 } from "./DiscussHelpers";
@@ -34,6 +35,7 @@ import {
   fulfilledRefreshEntries,
   selectChangedRefreshItems,
 } from "./RefreshHelpers";
+import { sumViewCounts } from "./PapersHelpers";
 
 import { createSharedRefresh, createWorkspaceReadCache, enqueueWorkspaceWrite } from "./WorkspaceRequests";
 import { WorkspacePagination, useWorkspacePage } from "./WorkspaceList";
@@ -81,6 +83,7 @@ const likeCacheKey = "outline.desktop.discuss.likes.v2";
 const statsCacheKey = "outline.desktop.discuss.stats.v1";
 const topicCacheKey = "outline.desktop.discuss.topics.v1";
 const seenKey = "outline.desktop.discuss.seen.v1";
+const firstVisitKey = "outline.desktop.discuss.firstVisit.v1";
 const TOPIC_CACHE_TTL = 5 * 60 * 1000;
 const TOPIC_FULL_REFRESH_TTL = 24 * 60 * 60 * 1000;
 const COMMENT_CACHE_TTL = 5 * 60 * 1000;
@@ -158,6 +161,16 @@ function DiscussWorkspace() {
   );
   const [query, setQuery] = React.useState("");
   const [category, setCategory] = React.useState<string | null>(null);
+  const [sort, setSort] = React.useState<TopicSort>("activity");
+  const [unreadOnly, setUnreadOnly] = React.useState(false);
+  const [firstOpenedAt] = React.useState(() => {
+    const key = `${firstVisitKey}.${scope}`;
+    const stored = localStorage.getItem(key);
+    if (stored) return stored;
+    const now = new Date().toISOString();
+    writeJson(key, now);
+    return now;
+  });
   const [loading, setLoading] = React.useState(() => !initialSnapshot);
   const [refreshing, setRefreshing] = React.useState(false);
   const [statsRefresh, setStatsRefresh] = React.useState(0);
@@ -490,7 +503,7 @@ function DiscussWorkspace() {
                 "/views.list",
                 { documentId: id }
               );
-              return [id, (response.data ?? []).length] as const;
+              return [id, sumViewCounts(response.data as { count?: number }[] ?? [])] as const;
             })
           );
           const checkedAt = Date.now();
@@ -649,8 +662,13 @@ function DiscussWorkspace() {
     }
   };
 
-  const visible = React.useMemo(() => visibleTopics(topics, pins, { category, query }), [topics, pins, category, query]);
-  const pagination = useWorkspacePage(visible.length, JSON.stringify([category, query]));
+  const visible = React.useMemo(
+    () => visibleTopics(
+      topics, pins, { category, query, sort, unreadOnly, seen, firstOpenedAt }, stats
+    ),
+    [topics, pins, category, query, sort, unreadOnly, seen, firstOpenedAt, stats]
+  );
+  const pagination = useWorkspacePage(visible.length, JSON.stringify([category, query, sort, unreadOnly]));
   const pageItems = visible.slice(pagination.page * pagination.pageSize, (pagination.page + 1) * pagination.pageSize);
   const pinnedTopics = pageItems.filter((topic) => pins[topic.id]);
   const regularTopics = pageItems.filter((topic) => !pins[topic.id]);
@@ -671,7 +689,7 @@ function DiscussWorkspace() {
     const activity = stats[topic.id];
     const lastActivity =
       activity?.lastActivity ?? topic.updatedAt ?? topic.createdAt;
-    const unread = isTopicUnread(lastActivity, seen[topic.id]);
+    const unread = isTopicUnread(lastActivity, seen[topic.id] ?? firstOpenedAt);
     const topicLikes = likeData.topics[topic.id] ?? {};
     const liked = !!(user && topicLikes[user.id]);
     const likeCount = Object.keys(topicLikes).length;
@@ -817,6 +835,24 @@ function DiscussWorkspace() {
               placeholder="搜索讨论主题…"
             />
           </SearchBox>
+          <SortSelect
+            aria-label="讨论排序"
+            value={sort}
+            onChange={(event) => setSort(event.target.value as TopicSort)}
+          >
+            <option value="activity">最新回复</option>
+            <option value="newest">最新发布</option>
+            <option value="replies">回复最多</option>
+            <option value="views">阅读最多</option>
+          </SortSelect>
+          <UnreadFilter
+            type="button"
+            $active={unreadOnly}
+            aria-pressed={unreadOnly}
+            onClick={() => setUnreadOnly((current) => !current)}
+          >
+            {unreadOnly ? "✓ 只看未读" : "只看未读"}
+          </UnreadFilter>
         </Toolbar>
 
         {composing && (
@@ -899,13 +935,14 @@ function DiscussWorkspace() {
         )}
 
         {error && <ErrorText role="alert">{error}</ErrorText>}
-        {(category || query.trim()) && (
+        {(category || query.trim() || unreadOnly) && (
           <Summary>
             <strong>{visible.length}</strong> 个主题
             {category && categoryNames.get(category)
               ? ` · ${categoryNames.get(category)}`
               : ""}
             {query.trim() ? ` · 搜索“${query.trim()}”` : ""}
+            {unreadOnly ? " · 未读" : ""}
           </Summary>
         )}
         {loading ? (
@@ -913,7 +950,7 @@ function DiscussWorkspace() {
         ) : !forumFound ? (
           <Empty>尚未找到“讨论区”或“论坛空间”集合。</Empty>
         ) : visible.length === 0 ? (
-          <Empty>{topics.length === 0 ? "还没有讨论，发起第一个主题吧。" : <>没有匹配的讨论。<ButtonSmall neutral onClick={() => { setQuery(""); setCategory(null); }}>清除筛选</ButtonSmall></>}</Empty>
+          <Empty>{topics.length === 0 ? "还没有讨论，发起第一个主题吧。" : <>没有匹配的讨论。<ButtonSmall neutral onClick={() => { setQuery(""); setCategory(null); setUnreadOnly(false); }}>清除筛选</ButtonSmall></>}</Empty>
         ) : (
           <List>
             {pinnedTopics.length > 0 && <GroupLabel>置顶讨论</GroupLabel>}
@@ -1021,6 +1058,28 @@ const Toolbar = styled.div`
 const SearchBox = styled.div`
   flex: 1;
   min-width: min(220px, 100%);
+`;
+const SortSelect = styled.select`
+  padding: 8px 10px;
+  min-height: 34px;
+  border: 1px solid ${(p) => p.theme.divider};
+  border-radius: 6px;
+  background: ${(p) => p.theme.background};
+  color: ${(p) => p.theme.text};
+  font-size: 13px;
+  cursor: pointer;
+`;
+const UnreadFilter = styled.button<{ $active: boolean }>`
+  padding: 8px 12px;
+  min-height: 34px;
+  white-space: nowrap;
+  border: 1px solid ${(p) => p.$active ? p.theme.accent : p.theme.divider};
+  border-radius: 6px;
+  color: ${(p) => p.$active ? p.theme.accent : p.theme.textSecondary};
+  background: ${(p) => p.theme.background};
+  font-size: 13px;
+  cursor: pointer;
+  &:hover { background: ${(p) => p.theme.backgroundSecondary}; }
 `;
 const ComposerPanel = styled.section`
   margin-bottom: 14px;
