@@ -38,7 +38,7 @@ import {
 } from "./RefreshHelpers";
 import { sumViewCounts } from "./PapersHelpers";
 
-import { createSharedRefresh, createWorkspaceReadCache, enqueueWorkspaceWrite } from "./WorkspaceRequests";
+import { createSharedRefresh, createWorkspaceReadCache, enqueueWorkspaceWrite, updateSharedWebdavJson } from "./WorkspaceRequests";
 import { WorkspacePagination, useWorkspacePage } from "./WorkspaceList";
 
 type Topic = Omit<CustomDocument, "createdBy"> & {
@@ -596,7 +596,8 @@ function DiscussWorkspace() {
   };
 
   const toggleLike = (id: string) => {
-    if (!user || !window.DesktopBridge) {
+    const bridge = window.DesktopBridge;
+    if (!user || !bridge) {
       return;
     }
     const liked = !likeData.topics[id]?.[user.id];
@@ -624,29 +625,7 @@ function DiscussWorkspace() {
       return next;
     });
     void enqueueWorkspaceWrite(`${scope}:${likesPath}`, async () => {
-        const result = asWebdavResult(
-          await window.DesktopBridge?.webdavGet(likesPath)
-        );
-        if (!result.ok) {
-          throw new Error("无法读取共享点赞数据，请检查 WebDAV 设置。");
-        }
-        const latest =
-          result.ok && result.data?.found
-            ? parseLikes(result.data.content)
-            : emptyLikes;
-        const merged = mutate(latest);
-        const saved = asWebdavResult(await window.DesktopBridge?.webdavPut(
-          likesPath,
-          JSON.stringify(merged, null, 2)
-        ));
-        if (!saved.ok) {
-          throw new Error("点赞尚未同步，请检查 WebDAV 后重试。");
-        }
-        // Keep later optimistic clicks intact while the queue drains.
-        localStorage.setItem(
-          `${likeCacheKey}.${scope}`,
-          JSON.stringify(merged)
-        );
+        await updateSharedWebdavJson(bridge, likesPath, parseLikes, mutate);
       })
       .catch((cause) => setError(cause instanceof Error ? cause.message : "点赞同步失败"));
   };
