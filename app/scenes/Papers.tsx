@@ -642,6 +642,7 @@ function PapersWorkspace() {
         metas,
         read,
         likes,
+        likeCounts,
         viewed,
         viewCounts,
         ratings,
@@ -652,6 +653,7 @@ function PapersWorkspace() {
       metas,
       read,
       likes,
+      likeCounts,
       viewed,
       viewCounts,
       ratings,
@@ -668,7 +670,8 @@ function PapersWorkspace() {
   const pagination = useWorkspacePage(visible.length, JSON.stringify([query, tag, year, month, readFilter, scope, sort]));
   const pageItems = visible.slice(pagination.page * pagination.pageSize, (pagination.page + 1) * pagination.pageSize);
   const clearFilters = () => {
-    setQuery(""); setTag(null); setYear(null); setMonth(null); setReadFilter(""); setScope("all");
+    setQuery(""); setTag(null); setYear(null); setMonth(null);
+    setReadFilter(""); setScope("all"); setSort("updated");
   };
 
   const cycleRead = (id: string) => {
@@ -927,7 +930,7 @@ function PapersWorkspace() {
             >
               <option value="updated">更新时间 新→旧</option>
               <option value="views">阅读量 多→少</option>
-              <option value="likes">点赞优先</option>
+              <option value="likes">点赞数 多→少</option>
               <option value="score">评分优先</option>
               <option value="title">标题 A→Z</option>
             </select>
@@ -971,7 +974,7 @@ function PapersWorkspace() {
           scope !== "all") && (
           <Summary>
             <strong>{visible.length}</strong> 篇匹配 · 已读{" "}
-            {Object.values(read).filter((value) => value === "read").length} 篇
+            {visible.filter((paper) => read[paper.id] === "read").length} 篇
             {scope === "history" && <span> · 按最近浏览排序</span>}
           </Summary>
         )}
