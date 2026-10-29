@@ -9,22 +9,22 @@ import { s } from "@shared/styles";
 import useStores from "~/hooks/useStores";
 import { client } from "~/utils/ApiClient";
 import { openInTab } from "~/utils/tabNavigation";
-import CollectionLink from "./CollectionLink";
-import SidebarContext from "./SidebarContext";
+import type Collection from "~/models/Collection";
 import type { CustomDocument } from "~/scenes/customData";
 import {
-  isPersonalNotesCollectionName,
   buildPersonalDirectoryParams,
+  isPersonalNotesCollectionName,
   parseDocumentInfoResult,
   parsePersonalRootResult,
   selectPersonalDirectoryDocuments,
   sortPersonalDocuments,
   type PersonalRoot,
 } from "~/scenes/PersonalNotesHelpers";
+import CollectionLink from "./CollectionLink";
 import Header from "./Header";
 import Section from "./Section";
 import SidebarLink from "./SidebarLink";
-import {
+import SidebarContext, {
   isActiveInSidebarContext,
   type SidebarContextType,
 } from "./SidebarContext";
@@ -175,7 +175,7 @@ function DocumentNode({
 
 // Reuse Outline's real collection/document tree: document expansion, permissions,
 // tabs, editing and creation then behave exactly as in the ordinary sidebar.
-function PersonalCollection({ collection }: { collection: import("~/models/Collection").default }) {
+function PersonalCollection({ collection }: { collection: Collection }) {
   const { documents } = useStores();
   const [expanded, setExpanded] = React.useState(true);
   return (
@@ -355,40 +355,64 @@ function PersonalNotes() {
           />
         ) : null}
         {root && rootDocument &&
-          !personalCollections.some((collection) => collection.id === root.collectionId) ? (
+          !personalCollections.some(
+            (collection) => collection.id === root.collectionId
+          ) ? (
           <>
-            {expanded.has(root.docId) &&
-              (childrenByParent[root.docId] ?? []).map((child) => (
-                <DocumentNode
-                  key={child.id}
-                  document={child}
-                  depth={0}
-                  expanded={expanded}
-                  loadedParents={loadedParents}
-                  loadingParents={loadingParents}
-                  childrenByParent={childrenByParent}
-                  onToggle={toggle}
-                  onOpen={openDocument}
-                />
-              ))}
-            {loadedParents.has(root.docId) &&
-              (childrenByParent[root.docId] ?? []).length === 0 && (
+            {(childrenByParent[root.docId] ?? []).length > 0 ||
+            personalCollections.length === 0 ? (
+              <>
                 <SidebarLink
-                  to={{
-                    pathname: documentUrl(rootDocument),
-                    state: { sidebarContext: personalNotesContext },
-                  }}
+                  to="/personal-notes"
                   icon={<NotepadIcon />}
-                  label={personalCollections.length > 0 ? "成员目录为空，打开根目录" : "个人目录为空，打开根目录"}
-                  iconIndentBase={12}
-                  scrollIntoViewIfNeeded={false}
-                  isActive={isPersonalNotesLinkActive}
-                  onClick={(event) => {
+                  label={`成员目录 · ${rootDocument.title.trim() || "个人目录"}`}
+                  expanded={expanded.has(root.docId)}
+                  onDisclosureClick={(event) => {
                     event.preventDefault();
-                    openDocument(rootDocument);
+                    toggle(root.docId);
                   }}
                 />
-              )}
+                {expanded.has(root.docId) &&
+                  (childrenByParent[root.docId] ?? []).map((child) => (
+                    <DocumentNode
+                      key={child.id}
+                      document={child}
+                      depth={1}
+                      expanded={expanded}
+                      loadedParents={loadedParents}
+                      loadingParents={loadingParents}
+                      childrenByParent={childrenByParent}
+                      onToggle={toggle}
+                      onOpen={openDocument}
+                    />
+                  ))}
+                {loadedParents.has(root.docId) &&
+                  (childrenByParent[root.docId] ?? []).length === 0 ? (
+                    <SidebarLink
+                      to={{
+                        pathname: documentUrl(rootDocument),
+                        state: { sidebarContext: personalNotesContext },
+                      }}
+                      icon={<NotepadIcon />}
+                      label="成员目录为空，打开根目录"
+                      iconIndentBase={12}
+                      scrollIntoViewIfNeeded={false}
+                      isActive={isPersonalNotesLinkActive}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        openDocument(rootDocument);
+                      }}
+                    />
+                  ) : null}
+              </>
+            ) : (
+              <SidebarLink
+                to="/personal-notes"
+                icon={<NotepadIcon />}
+                label="管理已关联的成员目录"
+                iconIndentBase={12}
+              />
+            )}
           </>
         ) : null}
         {error && !rootDocument ? (
