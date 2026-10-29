@@ -23,6 +23,7 @@ import usePolicy from "~/hooks/usePolicy";
 import useStores from "~/hooks/useStores";
 import { AuthorizationError } from "~/utils/errors";
 import { useSidebarLabelAndIcon } from "./useSidebarLabelAndIcon";
+import { canAttemptPersonalNotesMove, canStartPersonalNotesDrag } from "./personalNotesDrag";
 
 export type DragObject = NavigationNode & {
   depth: number;
@@ -33,6 +34,7 @@ export type DragObject = NavigationNode & {
    * cursor when this is explicitly `false` (e.g. drags from a document list).
    */
   constrainToSidebar?: boolean;
+  personalNotesTree?: boolean;
 };
 
 function useHover(
@@ -173,6 +175,17 @@ export function useDropToReorderStar(getIndex?: () => string) {
   });
 }
 
+function canMoveDraggedDocument(
+  item: DragObject,
+  policies: ReturnType<typeof useStores>["policies"]
+): boolean {
+  const policy = policies.get(item.id);
+  return canAttemptPersonalNotesMove(
+    !!item.personalNotesTree,
+    policy ? !!policies.abilities(item.id).move : undefined
+  );
+}
+
 /**
  * Hook for shared logic that allows dragging a sidebar section by its header.
  *
@@ -246,8 +259,10 @@ export function useDragDocument(
   depth: number,
   document?: Document,
   isEditing?: boolean,
-  constrainToSidebar = true
+  constrainToSidebar = true,
+  personalCollectionId?: string
 ) {
+  const { policies } = useStores();
   const icon = document?.icon || node.icon || node.emoji;
   const color = document?.color || node.color;
   const initial = document?.initial || node.title;
@@ -265,10 +280,19 @@ export function useDragDocument(
         icon: icon ? (
           <Icon initial={initial} value={icon} color={color} />
         ) : undefined,
-        collectionId: document?.collectionId || "",
+        collectionId: document?.collectionId || personalCollectionId || "",
         constrainToSidebar,
+        personalNotesTree: !!personalCollectionId,
       }) as DragObject,
-    canDrag: () => !!document?.isActive && !isEditing,
+    canDrag: () =>
+      canStartPersonalNotesDrag({
+        isEditing: !!isEditing,
+        isActive: document?.isActive,
+        hasPersonalCollection: !!personalCollectionId,
+        knownMovePermission: policies.get(node.id)
+          ? !!policies.abilities(node.id).move
+          : undefined,
+      }),
     collect: (monitor) => ({
       isDragging: monitor.isDragging(),
     }),
@@ -342,7 +366,7 @@ export function useDropToChangeCollection(
         }
       }
     },
-    canDrop: (item) => can.createDocument && !!policies.abilities(item.id).move,
+    canDrop: (item) => can.createDocument && canMoveDraggedDocument(item, policies),
     hover: (_, monitor) => {
       if (
         collection.hasDocuments &&
@@ -434,7 +458,7 @@ export function useDropToReparentDocument(
       }
     },
     canDrop: (item) => {
-      if (!node || item.id === node.id || !policies.abilities(item.id).move) {
+      if (!node || item.id === node.id || !canMoveDraggedDocument(item, policies)) {
         return false;
       }
 
@@ -496,7 +520,7 @@ export function useDropToReorderDocument(
       if (item.id === node.id || (document && !document.isActive)) {
         return false;
       }
-      return !!policies.abilities(item.id).move;
+      return canMoveDraggedDocument(item, policies);
     },
     drop: async (item) => {
       if (!collection?.isManualSort && item.collectionId === collection?.id) {
