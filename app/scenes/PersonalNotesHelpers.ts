@@ -1,5 +1,10 @@
 import type { CustomDocument } from "./customData";
 
+/** The dedicated collection belongs in the personal-notes sidebar on desktop. */
+export function isPersonalNotesCollectionName(name: string): boolean {
+  return name.trim().toLocaleLowerCase("en") === "personal";
+}
+
 export type PersonalRoot = {
   docId: string;
   collectionId: string;
