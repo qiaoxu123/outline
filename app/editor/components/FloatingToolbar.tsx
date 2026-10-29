@@ -9,7 +9,7 @@ import { findParentNode } from "@shared/editor/queries/findParentNode";
 import { EditorStyleHelper } from "@shared/editor/styles/EditorStyleHelper";
 import { depths, hairline, s } from "@shared/styles";
 import { HEADER_HEIGHT } from "~/components/Header";
-import { Portal } from "~/components/Portal";
+
 import useEventListener from "~/hooks/useEventListener";
 import useKeyboardStickyOffset from "~/hooks/useKeyboardStickyOffset";
 import useMobile from "~/hooks/useMobile";
@@ -333,8 +333,10 @@ const FloatingToolbar = React.forwardRef(function FloatingToolbar_(
     return null;
   }
 
+  // Render against the viewport instead of the scrollable editor wrapper.
+  // The editor may sit inside an overflow-clipped split pane in Electron.
   return (
-    <Portal>
+    <ReactPortal>
       <Wrapper
         active={props.active && position.visible}
         arrow={!!props.children && !position.blockSelection}
@@ -351,7 +353,7 @@ const FloatingToolbar = React.forwardRef(function FloatingToolbar_(
           <Background align={props.align}>{props.children}</Background>
         )}
       </Wrapper>
-    </Portal>
+    </ReactPortal>
   );
 });
 
@@ -459,7 +461,9 @@ const enableInteraction = keyframes`
 
 const Wrapper = styled.div<WrapperProps>`
   will-change: opacity, transform;
-  position: absolute;
+  // Coordinates from ProseMirror are viewport-relative. A fixed body portal
+  // also avoids clipping by the desktop editor's scroll containers.
+  position: fixed;
   z-index: ${depths.editorToolbar};
   opacity: 0;
   transform: scale(0.95);
