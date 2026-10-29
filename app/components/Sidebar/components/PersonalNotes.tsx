@@ -172,13 +172,17 @@ function DocumentNode({
   );
 }
 
+// The ordinary collection row is an observer. Once that row is omitted,
+// observe the document list itself to update after fetches and new notes.
+const ObservedCollectionLinkChildren = observer(CollectionLinkChildren);
+
 // Show the dedicated Personal collection's documents directly under the
 // section header. Never add a second "Personal" row or duplicate hierarchy.
 function PersonalCollection({ collection }: { collection: import("~/models/Collection").default }) {
   const { documents } = useStores();
   return (
     <SidebarContext.Provider value="personal-notes">
-      <CollectionLinkChildren
+      <ObservedCollectionLinkChildren
         collection={collection}
         expanded
         documentDepth={0}
