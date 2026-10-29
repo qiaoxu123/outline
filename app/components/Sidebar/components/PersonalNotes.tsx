@@ -20,6 +20,8 @@ import {
   type PersonalRoot,
 } from "~/scenes/PersonalNotesHelpers";
 import CollectionLinkChildren from "./CollectionLinkChildren";
+import { useDropToChangeCollection } from "../hooks/useDragAndDrop";
+import { mergeRefs } from "react-merge-refs";
 import Header from "./Header";
 import Section from "./Section";
 import SidebarLink from "./SidebarLink";
@@ -180,15 +182,30 @@ const ObservedCollectionLinkChildren = observer(CollectionLinkChildren);
 // section header. Never add a second "Personal" row or duplicate hierarchy.
 function PersonalCollection({ collection }: { collection: import("~/models/Collection").default }) {
   const { documents } = useStores();
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  // The normal CollectionLink provided the drop target for moving a nested
+  // document back to the Personal root. Our flattened heading has no row, so
+  // attach that target to the real tree instead (no extra sidebar entry).
+  const [{ isOver, canDrop }, dropRef] = useDropToChangeCollection(
+    collection,
+    () => undefined,
+    containerRef
+  );
+  const mergedRef = React.useMemo(
+    () => mergeRefs<HTMLDivElement>([containerRef, dropRef]),
+    [dropRef]
+  );
   return (
     <SidebarContext.Provider value="personal-notes">
-      {/* Depth 1 reserves room for root chevrons and aligns nested notes. */}
-      <ObservedCollectionLinkChildren
-        collection={collection}
-        expanded
-        documentDepth={1}
-        prefetchDocument={documents.prefetchDocument}
-      />
+      <PersonalDropArea ref={mergedRef} $isOver={isOver && canDrop}>
+        {/* Depth 1 reserves room for root chevrons and aligns nested notes. */}
+        <ObservedCollectionLinkChildren
+          collection={collection}
+          expanded
+          documentDepth={1}
+          prefetchDocument={documents.prefetchDocument}
+        />
+      </PersonalDropArea>
     </SidebarContext.Provider>
   );
 }
@@ -338,7 +355,7 @@ function PersonalNotes() {
   );
 
   return (
-    <PersonalSection>
+    <Section>
       <Header id="personal-notes" title="个人笔记">
         {personalCollections.map((collection) => (
           <PersonalCollection key={collection.id} collection={collection} />
@@ -415,49 +432,14 @@ function PersonalNotes() {
           />
         ) : null}
       </Header>
-      <PersonalSettingsButton
-        type="button"
-        onClick={() => history.push("/personal-notes")}
-        title="管理个人笔记目录"
-        aria-label="管理个人笔记目录"
-      >
-        设置
-      </PersonalSettingsButton>
-    </PersonalSection>
+    </Section>
   );
 }
 
-const PersonalSettingsButton = styled.button`
-  position: absolute;
-  top: 1px;
-  inset-inline-end: 10px;
-  z-index: 1;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  padding: 4px 6px;
-  font-size: 12px;
-  color: ${s("sidebarText")};
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 100ms ease;
-
-  &:hover,
-  &:focus-visible {
-    opacity: 1;
-    background: ${s("sidebarHoverBackground")};
-  }
-
-  @media (hover: none) {
-    opacity: 1;
-  }
-`;
-
-const PersonalSection = styled(Section)`
-  &:hover ${PersonalSettingsButton},
-  &:focus-within ${PersonalSettingsButton} {
-    opacity: 1;
-  }
+const PersonalDropArea = styled.div<{ $isOver: boolean }>`
+  border-radius: 6px;
+  background: ${(props) =>
+    props.$isOver ? props.theme.sidebarHoverBackground : "transparent"};
 `;
 
 const Status = styled.div`
