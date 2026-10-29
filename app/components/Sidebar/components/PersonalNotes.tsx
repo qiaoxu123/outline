@@ -9,8 +9,11 @@ import { s } from "@shared/styles";
 import useStores from "~/hooks/useStores";
 import { client } from "~/utils/ApiClient";
 import { openInTab } from "~/utils/tabNavigation";
+import CollectionLink from "./CollectionLink";
+import SidebarContext from "./SidebarContext";
 import type { CustomDocument } from "~/scenes/customData";
 import {
+  isPersonalNotesCollectionName,
   buildPersonalDirectoryParams,
   parseDocumentInfoResult,
   parsePersonalRootResult,
@@ -170,9 +173,36 @@ function DocumentNode({
   );
 }
 
+// Reuse Outline's real collection/document tree: document expansion, permissions,
+// tabs, editing and creation then behave exactly as in the ordinary sidebar.
+function PersonalCollection({ collection }: { collection: import("~/models/Collection").default }) {
+  const { documents } = useStores();
+  const [expanded, setExpanded] = React.useState(true);
+  return (
+    <SidebarContext.Provider value="personal-notes">
+      <CollectionLink
+        collection={collection}
+        activeDocument={documents.active}
+        expanded={expanded}
+        onDisclosureClick={(event) => {
+          event?.preventDefault();
+          setExpanded((current) => !current);
+        }}
+      />
+    </SidebarContext.Provider>
+  );
+}
+
 function PersonalNotes() {
   const history = useHistory();
-  const { auth, documents, tabs } = useStores();
+  const { auth, documents, tabs, collections } = useStores();
+  const personalCollections =
+    typeof window !== "undefined" && window.DesktopBridge
+      ? collections.allActive.filter((collection) =>
+          isPersonalNotesCollectionName(collection.name)
+        )
+      : [];
+
   const scope = auth.currentTeamId ?? window.location.host;
   const [root, setRoot] = React.useState<PersonalRoot | null>(null);
   const [rootDocument, setRootDocument] = React.useState<CustomDocument | null>(
@@ -310,16 +340,22 @@ function PersonalNotes() {
   return (
     <Section>
       <Header id="personal-notes" title="个人笔记">
-        {loading ? <Status>正在读取成员目录…</Status> : null}
+        {personalCollections.map((collection) => (
+          <PersonalCollection key={collection.id} collection={collection} />
+        ))}
+        {loading && personalCollections.length === 0 ? (
+          <Status>正在读取成员目录…</Status>
+        ) : null}
         {!loading && !root ? (
           <SidebarLink
             to="/personal-notes"
             icon={<NotepadIcon />}
-            label="设置个人目录…"
+            label={personalCollections.length > 0 ? "关联成员目录（可选）" : "设置个人目录…"}
             iconIndentBase={12}
           />
         ) : null}
-        {root && rootDocument ? (
+        {root && rootDocument &&
+          !personalCollections.some((collection) => collection.id === root.collectionId) ? (
           <>
             {expanded.has(root.docId) &&
               (childrenByParent[root.docId] ?? []).map((child) => (
@@ -343,7 +379,7 @@ function PersonalNotes() {
                     state: { sidebarContext: personalNotesContext },
                   }}
                   icon={<NotepadIcon />}
-                  label="个人目录为空，打开根目录"
+                  label={personalCollections.length > 0 ? "成员目录为空，打开根目录" : "个人目录为空，打开根目录"}
                   iconIndentBase={12}
                   scrollIntoViewIfNeeded={false}
                   isActive={isPersonalNotesLinkActive}
