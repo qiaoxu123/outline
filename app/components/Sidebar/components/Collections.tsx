@@ -21,12 +21,20 @@ import SidebarContext from "./SidebarContext";
 import SidebarLink from "./SidebarLink";
 import Text from "@shared/components/Text";
 import usePolicy from "~/hooks/usePolicy";
+import { isPersonalNotesCollectionName } from "~/scenes/PersonalNotesHelpers";
 
 function Collections() {
   const { documents, auth, collections, policies } = useStores();
   const { t } = useTranslation();
   const can = usePolicy(auth.team?.id);
-  const orderedCollections = collections.allActive;
+  // On desktop the dedicated Personal collection is rendered in the
+  // personal-notes section; keep the ordinary web UI unchanged.
+  const orderedCollections =
+    typeof window !== "undefined" && window.DesktopBridge
+      ? collections.allActive.filter(
+          (collection) => !isPersonalNotesCollectionName(collection.name)
+        )
+      : collections.allActive;
 
   const params = useMemo(
     () => ({
