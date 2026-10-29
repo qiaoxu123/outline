@@ -38,6 +38,8 @@ type Props = {
   expanded: boolean;
   /** Indentation depth of the parent collection. */
   depth?: number;
+  /** Override nesting when rendering a collection directly under a section header. */
+  documentDepth?: number;
   /** Function to prefetch a document by ID. */
   prefetchDocument?: (documentId: string) => Promise<Document | void>;
   /** Element to display above the child documents */
@@ -48,12 +50,13 @@ function CollectionLinkChildren({
   collection,
   expanded,
   depth = 0,
+  documentDepth,
   prefetchDocument,
   children,
 }: Props) {
   // Documents sit one level below the collection, with a minimum that leaves
   // room for their own disclosure to the left of the label.
-  const childDepth = Math.max(depth + 1, 2);
+  const childDepth = documentDepth ?? Math.max(depth + 1, 2);
   const pageSize = DEFAULT_PAGE_SIZE;
   const { documents, ui } = useStores();
   const { t } = useTranslation();
