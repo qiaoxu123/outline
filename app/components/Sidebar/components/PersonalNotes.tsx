@@ -182,11 +182,10 @@ function PersonalCollection({ collection }: { collection: import("~/models/Colle
   const { documents } = useStores();
   return (
     <SidebarContext.Provider value="personal-notes">
+      {/* Depth 1 reserves room for root chevrons and aligns nested notes. */}
       <ObservedCollectionLinkChildren
         collection={collection}
         expanded
-        // Keep room for the native disclosure chevron to the left of
-        // first-level titles. Depth 0 clips it outside the sidebar link.
         documentDepth={1}
         prefetchDocument={documents.prefetchDocument}
       />
