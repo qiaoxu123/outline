@@ -1,5 +1,6 @@
 import type { CustomDocument } from "./customData";
 import {
+  isPersonalNotesCollectionName,
   buildPersonalDirectoryParams,
   findPersonalRoot,
   parseDocumentInfoResult,
@@ -17,6 +18,15 @@ function document(
 }
 
 describe("PersonalNotesHelpers", () => {
+  it("recognizes only the dedicated Personal collection (not arbitrary member spaces)", () => {
+    expect(isPersonalNotesCollectionName("Personal")).toBe(true);
+    expect(isPersonalNotesCollectionName("  personal  ")).toBe(true);
+    expect(isPersonalNotesCollectionName("PERSONAL")).toBe(true);
+    expect(isPersonalNotesCollectionName("Personal Research")).toBe(false);
+    expect(isPersonalNotesCollectionName("成员空间")).toBe(false);
+  });
+
+
   it("limits every directory request to the configured root and collection", () => {
     expect(
       buildPersonalDirectoryParams({
