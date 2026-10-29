@@ -22,6 +22,7 @@ import {
 import { useEditor } from "./EditorContext";
 import { MediaLinkEditor } from "./MediaLinkEditor";
 import FloatingToolbar from "./FloatingToolbar";
+import { hasTextSelection } from "./hasTextSelection";
 import LinkEditor from "./LinkEditor";
 import ToolbarMenu from "./ToolbarMenu";
 import InlineMenu from "./InlineMenu";
@@ -72,13 +73,20 @@ export function SelectionToolbar(props: Props) {
   const { view, extensions, commands, selectionToolbarMenus } = useEditor();
   const menuRef = React.useRef<HTMLDivElement | null>(null);
   const isMobile = useMobile();
-  const isActive = props.isActive || isMobile;
+  const { state } = view;
+  // The extension visibility state can lag a real mouse selection in Electron.
+  // Use ProseMirror's actual text range as a fallback without reviving a stale
+  // selection after the editor loses focus.
+  const hasSelectedText = hasTextSelection(state);
+  const isActive =
+    props.isActive ||
+    (hasSelectedText && (isEditorFocused || view.hasFocus())) ||
+    isMobile;
 
   // On mobile the toolbar is docked above the on-screen keyboard, so it stays
   // visible for as long as the editor is being edited rather than only while
   // there is a selection.
   const isMobileEditing = isMobile && !readOnly && isEditorFocused;
-  const { state } = view;
   const [autoFocusLinkInput, setAutoFocusLinkInput] = React.useState(false);
   const isDragging = useIsDragging(state);
   const { selection } = state;
