@@ -51,11 +51,13 @@ import {
 
 import { createSharedRefresh, enqueueWorkspaceWrite } from "./WorkspaceRequests";
 import { WorkspaceNotice, WorkspacePagination, useWorkspacePage } from "./WorkspaceList";
+import { indexPaperSources } from "./PaperSources";
 
-const PAPER = "📖";
 const readKey = "outline.desktop.papers.read.v1";
 const likesKey = "outline.desktop.papers.likes.v1";
-const paperCacheKey = "outline.desktop.papers.snapshot.v3";
+// v4 corrects source discovery and counts; keep v3 visible while reindexing.
+const paperCacheKey = "outline.desktop.papers.snapshot.v4";
+const legacyPaperCacheKey = "outline.desktop.papers.snapshot.v3";
 const paperViewsCacheKey = "outline.desktop.papers.views.v1";
 const PAPER_CACHE_TTL = 5 * 60 * 1000;
 const PAPER_SOURCE_DISCOVERY_TTL = 24 * 60 * 60 * 1000;
@@ -108,11 +110,15 @@ function asWebdavResult(value: unknown): WebdavResult {
 
 function readPaperSnapshot(scope: string): PaperSnapshot | null {
   try {
-    const parsed = JSON.parse(
-      localStorage.getItem(`${paperCacheKey}.${scope}`) ?? "null"
-    ) as PaperSnapshot | null;
+    const current = localStorage.getItem(`${paperCacheKey}.${scope}`);
+    const legacy = current
+      ? null
+      : localStorage.getItem(`${legacyPaperCacheKey}.${scope}`);
+    const parsed = JSON.parse(current ?? legacy ?? "null") as PaperSnapshot | null;
     return parsed && Array.isArray(parsed.papers) && parsed.metas
-      ? parsed
+      ? legacy
+        ? { ...parsed, savedAt: 0, sourcesDiscoveredAt: 0 }
+        : parsed
       : null;
   } catch {
     return null;
@@ -150,53 +156,6 @@ function writePaperViews(scope: string, cache: PaperViewsCache): void {
   } catch {
     // Reading the library must still work when browser storage is full.
   }
-}
-
-function flatten(tree: CustomDocument[]): CustomDocument[] {
-  const result: CustomDocument[] = [];
-  const pending = [...tree];
-  while (pending.length) {
-    const item = pending.shift()!;
-    result.push(item);
-    pending.unshift(...(item.children ?? []));
-  }
-  return result;
-}
-
-function collectRecommendation(
-  nodes: CustomDocument[],
-  year: number | null = null,
-  month: number | null = null
-): Paper[] {
-  return nodes.flatMap((node) => {
-    const title = node.title.trim();
-    const y = /^(\d{4})\s*年/.exec(title);
-    const m = /^(\d{1,2})\s*月/.exec(title);
-    if (y) {
-      return collectRecommendation(node.children ?? [], Number(y[1]), month);
-    }
-    if (m) {
-      return collectRecommendation(node.children ?? [], year, Number(m[1]));
-    }
-    return [{ ...node, children: undefined, year, month }];
-  });
-}
-
-function collectFeatured(
-  nodes: CustomDocument[],
-  topic: string | null = null,
-  source = "featured"
-): Paper[] {
-  return nodes.flatMap((node) => {
-    const title = node.title.trim();
-    if (title.startsWith(PAPER)) {
-      return [
-        { ...node, children: undefined, title, topic, source } as Paper,
-        ...collectFeatured(node.children ?? [], topic, source),
-      ];
-    }
-    return collectFeatured(node.children ?? [], topic ?? title, source);
-  });
 }
 
 function readMap(key: string): Record<string, string> {
@@ -417,40 +376,9 @@ function PapersWorkspace() {
         const trees = treeResults.flatMap((result) =>
           result.status === "fulfilled" ? [result.value] : []
         );
-        const found: Paper[] = [];
-        const scanCollectionIds = new Set<string>();
-        for (const { collection, tree } of trees) {
-          const root = flatten(tree).find(
-            (item) => item.title.trim() === "推荐阅读"
-          );
-          if (root) {
-            scanCollectionIds.add(collection.id);
-            found.push(...collectRecommendation(root.children ?? []));
-          }
-          if (collection.name.trim() === "组内工作") {
-            scanCollectionIds.add(collection.id);
-            found.push(
-              ...flatten(tree)
-                .filter((item) => item.title.trim().startsWith(PAPER))
-                .map(
-                  (item) =>
-                    ({
-                      ...item,
-                      children: undefined,
-                      topic: "组内工作",
-                      source: "internal",
-                    }) as Paper
-                )
-            );
-          }
-          if (collection.name.trim() === "精选专题") {
-            scanCollectionIds.add(collection.id);
-            found.push(...collectFeatured(tree));
-          }
-        }
-        const indexed = [
-          ...new Map(found.map((item) => [item.id, item])).values(),
-        ];
+        const { papers: indexed, sourceCollectionIds } =
+          indexPaperSources(trees);
+        const scanCollectionIds = new Set(sourceCollectionIds);
         const cachedPapers = new Map(
           (cached?.papers ?? []).map((paper) => [paper.id, paper])
         );
