@@ -9,7 +9,6 @@ import { s } from "@shared/styles";
 import useStores from "~/hooks/useStores";
 import { client } from "~/utils/ApiClient";
 import { openInTab } from "~/utils/tabNavigation";
-import type Collection from "~/models/Collection";
 import type { CustomDocument } from "~/scenes/customData";
 import {
   buildPersonalDirectoryParams,
@@ -20,7 +19,7 @@ import {
   sortPersonalDocuments,
   type PersonalRoot,
 } from "~/scenes/PersonalNotesHelpers";
-import CollectionLink from "./CollectionLink";
+import CollectionLinkChildren from "./CollectionLinkChildren";
 import Header from "./Header";
 import Section from "./Section";
 import SidebarLink from "./SidebarLink";
@@ -173,21 +172,17 @@ function DocumentNode({
   );
 }
 
-// Reuse Outline's real collection/document tree: document expansion, permissions,
-// tabs, editing and creation then behave exactly as in the ordinary sidebar.
-function PersonalCollection({ collection }: { collection: Collection }) {
+// Show the dedicated Personal collection's documents directly under the
+// section header. Never add a second "Personal" row or duplicate hierarchy.
+function PersonalCollection({ collection }: { collection: import("~/models/Collection").default }) {
   const { documents } = useStores();
-  const [expanded, setExpanded] = React.useState(true);
   return (
     <SidebarContext.Provider value="personal-notes">
-      <CollectionLink
+      <CollectionLinkChildren
         collection={collection}
-        activeDocument={documents.active}
-        expanded={expanded}
-        onDisclosureClick={(event) => {
-          event?.preventDefault();
-          setExpanded((current) => !current);
-        }}
+        expanded
+        documentDepth={0}
+        prefetchDocument={documents.prefetchDocument}
       />
     </SidebarContext.Provider>
   );
@@ -338,7 +333,7 @@ function PersonalNotes() {
   );
 
   return (
-    <Section>
+    <PersonalSection>
       <Header id="personal-notes" title="个人笔记">
         {personalCollections.map((collection) => (
           <PersonalCollection key={collection.id} collection={collection} />
@@ -346,11 +341,11 @@ function PersonalNotes() {
         {loading && personalCollections.length === 0 ? (
           <Status>正在读取成员目录…</Status>
         ) : null}
-        {!loading && !root ? (
+        {!loading && !root && personalCollections.length === 0 ? (
           <SidebarLink
             to="/personal-notes"
             icon={<NotepadIcon />}
-            label={personalCollections.length > 0 ? "关联成员目录（可选）" : "设置个人目录…"}
+            label="设置个人目录…"
             iconIndentBase={12}
           />
         ) : null}
@@ -405,26 +400,60 @@ function PersonalNotes() {
                     />
                   ) : null}
               </>
-            ) : (
-              <SidebarLink
-                to="/personal-notes"
-                icon={<NotepadIcon />}
-                label="管理已关联的成员目录"
-                iconIndentBase={12}
-              />
-            )}
+            ) : null}
           </>
         ) : null}
-        {error && !rootDocument ? (
+        {error && !rootDocument && personalCollections.length === 0 ? (
           <SidebarLink
             to="/personal-notes"
             label="个人目录加载失败，点击检查"
           />
         ) : null}
       </Header>
-    </Section>
+      <PersonalSettingsButton
+        type="button"
+        onClick={() => history.push("/personal-notes")}
+        title="管理个人笔记目录"
+        aria-label="管理个人笔记目录"
+      >
+        设置
+      </PersonalSettingsButton>
+    </PersonalSection>
   );
 }
+
+const PersonalSettingsButton = styled.button`
+  position: absolute;
+  top: 1px;
+  inset-inline-end: 10px;
+  z-index: 1;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: ${s("sidebarText")};
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 100ms ease;
+
+  &:hover,
+  &:focus-visible {
+    opacity: 1;
+    background: ${s("sidebarHoverBackground")};
+  }
+
+  @media (hover: none) {
+    opacity: 1;
+  }
+`;
+
+const PersonalSection = styled(Section)`
+  &:hover ${PersonalSettingsButton},
+  &:focus-within ${PersonalSettingsButton} {
+    opacity: 1;
+  }
+`;
 
 const Status = styled.div`
   padding: 4px 12px 6px;
