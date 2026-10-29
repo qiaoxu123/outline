@@ -311,7 +311,9 @@ const DocumentLinkInner = observer(function DocumentLinkInner({
     node,
     depth,
     document,
-    isEditing
+    isEditing,
+    true,
+    sidebarContext === "personal-notes" ? collection?.id : undefined
   );
 
   const parentRef = React.useRef<HTMLDivElement>(null);
