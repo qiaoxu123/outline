@@ -185,7 +185,9 @@ function PersonalCollection({ collection }: { collection: import("~/models/Colle
       <ObservedCollectionLinkChildren
         collection={collection}
         expanded
-        documentDepth={0}
+        // Keep room for the native disclosure chevron to the left of
+        // first-level titles. Depth 0 clips it outside the sidebar link.
+        documentDepth={1}
         prefetchDocument={documents.prefetchDocument}
       />
     </SidebarContext.Provider>
