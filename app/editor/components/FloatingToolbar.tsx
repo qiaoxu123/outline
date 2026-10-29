@@ -85,6 +85,8 @@ function usePosition({
   const offsetParent = menuRef.current?.offsetParent
     ? menuRef.current.offsetParent.getBoundingClientRect()
     : ({
+        x: 0,
+        y: 0,
         width: window.innerWidth,
         height: window.innerHeight,
         top: 0,
